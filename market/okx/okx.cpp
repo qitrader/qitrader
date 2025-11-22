@@ -106,10 +106,10 @@ asio::awaitable<void> Okx::run() {
     // 根据通道类型分发数据
     if (msg.arg.channel == "books") {
       // 处理订单簿数据
-      co_await send_book(msg);
+      co_await deal_book(msg);
     } else if (msg.arg.channel == "tickers") {
       // 处理Tick数据
-      co_await send_tick(msg);
+      co_await deal_tick(msg);
     }
   }
 
@@ -117,7 +117,7 @@ asio::awaitable<void> Okx::run() {
 }
 
 // 处理WebSocket接收到的订单簿数据，转换为统一格式并发送到引擎
-asio::awaitable<void> Okx::send_book(const WsMessage& msg) {
+asio::awaitable<void> Okx::deal_book(const WsMessage& msg) {
   auto book = std::make_shared<engine::Book>();
   // 解析WebSocket消息中的订单簿数据
   auto book_data = std::any_cast<std::vector<WsBook>>(msg.data);
@@ -157,7 +157,7 @@ asio::awaitable<void> Okx::send_book(const WsMessage& msg) {
 }
 
 // 处理WebSocket接收到的Tick数据，转换为统一格式并发送到引擎
-asio::awaitable<void> Okx::send_tick(const WsMessage& msg) {
+asio::awaitable<void> Okx::deal_tick(const WsMessage& msg) {
   auto tick = std::make_shared<engine::TickData>();
   // 解析WebSocket消息中的Tick数据
   auto tick_data = std::any_cast<std::vector<WsTick>>(msg.data);
@@ -230,7 +230,11 @@ asio::awaitable<void> Okx::send_orders(engine::OrderDataPtr order) {
     auto req = SendOrderRequest();
     req.instId = item->symbol;
     req.side = item->direction == engine::Direction::BUY ? "buy" : "sell";
-    req.ordType = "limit";
+    if (item->otype == engine::OrderType::MARKET) {
+      req.ordType = "market";
+    } else if (item->otype == engine::OrderType::LIMIT) {
+      req.ordType = "limit";
+    }
     req.tdMode = "cash";
     req.px = item->price;
     req.sz = item->volume;

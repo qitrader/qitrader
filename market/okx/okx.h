@@ -106,14 +106,14 @@ class Okx : public base::Gateway {
    * @param msg WebSocket消息
    * @return asio::awaitable<void> 异步协程
    */
-  asio::awaitable<void> send_book(const WsMessage& msg);
+  asio::awaitable<void> deal_book(const WsMessage& msg);
 
   /**
    * @brief 处理WebSocket接收到的Tick数据
    * @param msg WebSocket消息
    * @return asio::awaitable<void> 异步协程
    */
-  asio::awaitable<void> send_tick(const WsMessage& msg);
+  asio::awaitable<void> deal_tick(const WsMessage& msg);
   ConcurrentMap<std::string, SingleMarket> markets_;
 
   OkxHttp http_;  ///< HTTP客户端，用于查询操作

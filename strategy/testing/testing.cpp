@@ -16,25 +16,29 @@ Testing::~Testing() {}
 asio::awaitable<void> Testing::run() {
   auto executor = co_await asio::this_coro::executor;
   LOG(INFO) << fmt::format("run");
-  
+
   // 查询账户信息
   co_await on_request_account();
   
   // 查询持仓信息
   co_await on_request_position();
   
-  // 订阅BTC-USDT的订单簿数据
-  co_await on_subscribe_book("BTC-USDT");
+  // 订阅BTC-USDT-SWAP的订单簿数据
+  co_await on_subscribe_book("BTC-USDT-SWAP");
   
-  // 订阅BTC-USDT的Tick数据
-  co_await on_subscribe_tick("BTC-USDT");
+  // 订阅BTC-USDT-SWAP的Tick数据
+  co_await on_subscribe_tick("BTC-USDT-SWAP");
+
+  boost::asio::steady_timer timer(executor);
+  timer.expires_after(1s);
+  co_await timer.async_wait(asio::use_awaitable);
   
   auto order = std::make_shared<engine::OrderData>();
   auto order_item = std::make_shared<engine::OrderDataItem>();
-  order_item->symbol = "BTC-USDT";
+  order_item->symbol = "BTC-USDT-SWAP";
   order_item->direction = engine::Direction::BUY;
-  order_item->price = 10000;
-  order_item->volume = dec_float("0.0001");
+  order_item->otype = engine::OrderType::MARKET;
+  order_item->volume = dec_float("0.01");
   order->items.push_back(order_item);
   co_await on_send_order(order);
   co_return;
@@ -57,13 +61,13 @@ asio::awaitable<void> Testing::recv_position(engine::PositionDataPtr position) {
 
 // 接收订单簿数据并打印买卖盘信息
 asio::awaitable<void> Testing::recv_book(engine::BookPtr order) {
-  LOG(INFO) << fmt::format("recv_book {}: ask {} bid {}", order->symbol, order->asks.size(), order->bids.size());
+  // LOG(INFO) << fmt::format("recv_book {}: ask {} bid {}", order->symbol, order->asks.size(), order->bids.size());
 
   co_return;
 }
 
 asio::awaitable<void> Testing::recv_tick(engine::TickDataPtr ticker) {
-  LOG(INFO) << fmt::format("recv_tick: {}", ticker->symbol);
+  // LOG(INFO) << fmt::format("recv_tick: {}", ticker->symbol);
   co_return;
 }
 

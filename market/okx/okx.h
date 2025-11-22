@@ -51,6 +51,18 @@ class Okx : public base::Gateway {
   asio::awaitable<void> run() override;
 
   /**
+   * @brief 监听公共WebSocket，处理公共数据
+   * @return asio::awaitable<void> 异步协程
+   */
+  asio::awaitable<void> watch_public();
+
+  /**
+   * @brief 监听私有WebSocket，处理私有数据
+   * @return asio::awaitable<void> 异步协程
+   */
+  asio::awaitable<void> watch_private();
+
+  /**
    * @brief 初始化市场网关，连接WebSocket
    * @return asio::awaitable<void> 异步协程
    */
@@ -106,18 +118,35 @@ class Okx : public base::Gateway {
    * @param msg WebSocket消息
    * @return asio::awaitable<void> 异步协程
    */
-  asio::awaitable<void> deal_book(const WsMessage& msg);
+  asio::awaitable<void> deal_book(const std::string& symbol, const std::vector<WsBook>& msg);
 
   /**
    * @brief 处理WebSocket接收到的Tick数据
    * @param msg WebSocket消息
    * @return asio::awaitable<void> 异步协程
    */
-  asio::awaitable<void> deal_tick(const WsMessage& msg);
+  asio::awaitable<void> deal_tick(const std::string& symbol, const std::vector<WsTick>& msg);
+
+  asio::awaitable<void> deal_account(const Account& msg);
+  asio::awaitable<void> deal_position(const std::vector<PositionDetail>& msg);
+
+  /**
+   * @brief 登录私有WebSocket
+   * @return asio::awaitable<void> 异步协程
+   */
+  asio::awaitable<void> ws_private_login();
+
+  asio::awaitable<void> ws_private_subscribe_account();
+
+  asio::awaitable<void> ws_private_subscribe_position();
+
+  asio::awaitable<void> ws_private_subscribe_order();
+
   ConcurrentMap<std::string, SingleMarket> markets_;
 
   OkxHttp http_;  ///< HTTP客户端，用于查询操作
-  OkxWs ws_;      ///< WebSocket客户端，用于接收实时数据
+  OkxWs ws_public_;      ///< WebSocket客户端，用于接收实时数据
+  OkxWs ws_private_;     ///< WebSocket客户端，用于接收私有数据
 };
 
 }  // namespace market::okx

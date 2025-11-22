@@ -97,6 +97,7 @@ struct SendOrderRequest {
   std::string side;
   std::string posSide;
   std::string ordType;
+  std::string tgtCcy;
   
   dec_float sz;
   dec_float px;
@@ -144,6 +145,36 @@ struct WsSubscibeDetail {
 
 typedef WsRequest<std::vector<WsSubscibeDetail>> WsSubscibeRequest;
 
+struct WsLoginDetail {
+  std::string apiKey;
+  std::string passphrase;
+  std::string timestamp;
+  std::string sign;
+};
+
+typedef WsRequest<std::vector<WsLoginDetail>> WsLoginRequest;
+
+struct WsSubscibeAccountDetail {
+  std::string channel;
+  std::string ccy;
+};
+
+typedef WsRequest<std::vector<WsSubscibeAccountDetail>> WsSubscibeAccountRequest;
+
+struct WsSubscibePositionDetail {
+  std::string channel;
+  std::string instType;
+};
+
+typedef WsRequest<std::vector<WsSubscibePositionDetail>> WsSubscibePositionRequest;
+
+struct WsSubscibeOrderDetail {
+  std::string channel;
+  std::string instType;
+};
+
+typedef WsRequest<std::vector<WsSubscibeOrderDetail>> WsSubscibeOrderRequest;
+
 struct WsArg {
   std::string channel;
   std::string instId;
@@ -161,6 +192,8 @@ struct WsMessage {
   // 错误
   int64_t code;
   std::string msg;
+
+  int connCount;
 };
 
 struct WsTick {
@@ -244,6 +277,8 @@ struct transform<market::okx::WsMessage> {
     if (t.event == "error") {
       t.msg = jo.at("msg").as_string();
       transform<decltype(t.code)>::trans(jo.at("code"), t.code);
+    } else if (t.event == "channel-conn-count") {
+      t.connCount = jo.at("connCount").as_int64();
     }
   }
 
@@ -258,6 +293,14 @@ struct transform<market::okx::WsMessage> {
       t.data = data;
       
       t.action = jo.at("action").as_string();
+    } else if (t.arg.channel == "account") {
+      auto data = std::vector<market::okx::Account>();
+      transform<decltype(data)>::trans(jo.at("data"), data);
+      t.data = data;
+    } else if (t.arg.channel == "positions") {
+      auto data = std::vector<market::okx::PositionDetail>();
+      transform<decltype(data)>::trans(jo.at("data"), data);
+      t.data = data;
     } else {
       throw std::runtime_error("invalid channel");
     }

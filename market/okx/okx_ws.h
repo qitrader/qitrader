@@ -13,6 +13,7 @@ namespace market::okx {
 class OkxWs {
  public:
   OkxWs();
+  OkxWs(std::string uri);
   ~OkxWs();
   asio::awaitable<void> connect();
   asio::awaitable<market::okx::WsMessage> read();
@@ -24,9 +25,15 @@ class OkxWs {
   }
 
  private:
-  std::shared_ptr<cpphttp::WebSocket> ws_;
-  const std::string url_ = "wss://ws.okx.com:8443/ws/v5/public";
+  std::unique_ptr<cpphttp::WebSocket> ws_;
+  std::string uri_ = "/ws/v5/public";
+  std::string base_url_ = "wss://ws.okx.com:8443";
 };
+
+std::string get_sign(
+  std::string timestamp,
+  std::string secret_key
+);
 
 }  // namespace market::okx
 

@@ -64,7 +64,7 @@ int main(int argc, char* argv[]) {
 
   // 创建各个组件
   auto wework = std::make_shared<notice::wework::WeworkNotice>(engine);  // 企业微信通知组件
-  auto testing = std::make_shared<stragy::testing::Testing>(engine);      // 测试策略组件
+  auto testing = std::make_shared<strategy::testing::Testing>(engine);      // 测试策略组件
   auto okx = std::make_shared<market::okx::Okx>(engine);
 
   // 将所有组件注册到引擎

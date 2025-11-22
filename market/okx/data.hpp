@@ -114,6 +114,23 @@ struct SendOrderRspDetail {
 
 typedef Respone<std::vector<SendOrderRspDetail>> SendOrderRespone;
 
+
+struct CancelOrderRequest {
+  std::string instId;
+  std::string ordId;
+  std::string clOrdId;
+};
+
+struct CancelOrderRspDetail {
+  std::string ordId;
+  std::string clOrdId;
+  int64_t ts; // 毫秒
+  int sCode;
+  std::string sMsg;
+};
+
+typedef Respone<std::vector<CancelOrderRspDetail>> CancelOrderRespone;
+
 template <typename T>
 struct WsRequest {
   std::string op;

@@ -66,7 +66,7 @@ asio::awaitable<void> Okx::query_position(engine::QueryPositionDataPtr data) {
 // 查询订单信息，通过HTTP API获取并转换为统一格式
 asio::awaitable<void> Okx::query_order(engine::QueryOrderDataPtr data) {
   // 调用HTTP API获取订单数据
-  auto orders = co_await http_.get_orders();
+  auto orders = co_await http_.get_pending_orders();
 
   auto orders_data = std::make_shared<engine::OrderData>();
 
@@ -146,7 +146,9 @@ asio::awaitable<void> Okx::send_book(const WsMessage& msg) {
     }
 
     // 保存最新的订单簿，供关联到Tick数据
-    last_book_ = item;
+    markets_.apply([item](std::map<std::string, SingleMarket> map) {
+      map[item->symbol].last_book = item;
+    });
     // 发送订单簿数据到引擎
     co_await on_book(item);
   }
@@ -178,9 +180,11 @@ asio::awaitable<void> Okx::send_tick(const WsMessage& msg) {
     item->high_price = tick_item.high24h;        // 24h最高价
     item->low_price = tick_item.low24h;          // 24h最低价
     
-    // 关联最新的订单簿数据
-    item->order_book = last_book_;
-    last_tick_ = item;
+    // 保存最新的Tick，供关联到订单簿数据
+    markets_.apply([item](std::map<std::string, SingleMarket> map) {
+      item->order_book = map[item->symbol].last_book;
+      map[item->symbol].last_tick = item;
+    });
 
     // 发送Tick数据到引擎
     co_await on_tick(item);

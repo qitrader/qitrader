@@ -4,7 +4,7 @@
 /**
  * @file okx.h
  * @brief OKX交易所网关实现
- * 
+ *
  * 实现了与OKX交易所的交互，包括：
  * - 通过HTTP API查询账户、持仓、订单
  * - 通过WebSocket接收实时行情数据
@@ -13,16 +13,23 @@
 #include <string>
 
 #include "base/gateway.h"
+#include "config/config.h"
 #include "engine.h"
 #include "okx_http.h"
 #include "okx_ws.h"
-#include "config/config.h"
+#include "utils/concurrent_map.hpp"
 
 namespace market::okx {
 
+struct SingleMarket : public std::enable_shared_from_this<SingleMarket> {
+  std::string symbol;
+  engine::BookPtr last_book;      ///< 最近一次接收的订单簿数据
+  engine::TickDataPtr last_tick;  ///< 最近一次接收的Tick数据
+};
+
 /**
  * @brief OKX交易所网关
- * 
+ *
  * 继承自通用网关基类，实现了OKX交易所的具体功能。
  * 使用HTTP进行查询操作，使用WebSocket接收实时数据推送。
  */
@@ -33,7 +40,7 @@ class Okx : public base::Gateway {
 
   /// 连接功能（当前未实现）
   void connect() override{};
-  
+
   /// 关闭连接功能（当前未实现）
   void close() override{};
 
@@ -42,7 +49,7 @@ class Okx : public base::Gateway {
    * @return asio::awaitable<void> 异步协程
    */
   asio::awaitable<void> run() override;
-  
+
   /**
    * @brief 初始化市场网关，连接WebSocket
    * @return asio::awaitable<void> 异步协程
@@ -54,11 +61,9 @@ class Okx : public base::Gateway {
 
   /// 发送订单（当前未实现）
   asio::awaitable<void> send_orders(engine::OrderDataPtr order) override;
-  
+
   /// 取消订单（当前未实现）
-  asio::awaitable<void> cancel_order(engine::OrderDataPtr order) override{
-    co_return;
-  };
+  asio::awaitable<void> cancel_order(engine::OrderDataPtr order) override { co_return; };
 
   /**
    * @brief 查询账户信息，通过HTTP API获取
@@ -94,7 +99,7 @@ class Okx : public base::Gateway {
    * @return asio::awaitable<void> 异步协程
    */
   asio::awaitable<void> subscribe_tick(engine::SubscribeDataPtr data) override;
-  
+
  private:
   /**
    * @brief 处理WebSocket接收到的订单簿数据
@@ -102,16 +107,14 @@ class Okx : public base::Gateway {
    * @return asio::awaitable<void> 异步协程
    */
   asio::awaitable<void> send_book(const WsMessage& msg);
-  
+
   /**
    * @brief 处理WebSocket接收到的Tick数据
    * @param msg WebSocket消息
    * @return asio::awaitable<void> 异步协程
    */
   asio::awaitable<void> send_tick(const WsMessage& msg);
-  
-  engine::BookPtr last_book_;      ///< 最近一次接收的订单簿数据
-  engine::TickDataPtr last_tick_;  ///< 最近一次接收的Tick数据
+  ConcurrentMap<std::string, SingleMarket> markets_;
 
   OkxHttp http_;  ///< HTTP客户端，用于查询操作
   OkxWs ws_;      ///< WebSocket客户端，用于接收实时数据

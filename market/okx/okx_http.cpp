@@ -77,7 +77,7 @@ asio::awaitable<std::vector<PositionDetail>> OkxHttp::get_positions(){
   co_return position_rsp->data;
 }
 
-asio::awaitable<std::vector<QueryOrderDetail>> OkxHttp::get_orders(){
+asio::awaitable<std::vector<QueryOrderDetail>> OkxHttp::get_pending_orders(){
   auto resp = co_await request_->request("GET", "/api/v5/trade/orders-pending", "");
   LOG(INFO) << "get orders response: " << resp;
   auto order_rsp = jsoncpp::from_json<QueryOrderRespone>(resp);
@@ -97,6 +97,18 @@ asio::awaitable<std::vector<SendOrderRspDetail>> OkxHttp::send_orders(const std:
   if (order_rsp->code != 0 && order_rsp->code != 1 && order_rsp->code != 2) {
     LOG(ERROR) << "send order failed, code: " << order_rsp->code << ", msg: " << order_rsp->msg;
     throw std::runtime_error(fmt::format("send order failed, code: {}, msg: {}", order_rsp->code, order_rsp->msg));
+  }
+
+  co_return order_rsp->data;
+}
+
+asio::awaitable<std::vector<CancelOrderRspDetail>> OkxHttp::cancel_orders(const std::vector<CancelOrderRequest>& request) {
+  auto resp = co_await request_->request(
+    "POST", "/api/v5/trade/cancel-batch-orders", jsoncpp::to_json(request));
+  auto order_rsp = jsoncpp::from_json<CancelOrderRespone>(resp);
+  if (order_rsp->code != 0) {
+    LOG(ERROR) << "cancel order failed, code: " << order_rsp->code << ", msg: " << order_rsp->msg;
+    throw std::runtime_error(fmt::format("cancel order failed, code: {}, msg: {}", order_rsp->code, order_rsp->msg));
   }
 
   co_return order_rsp->data;

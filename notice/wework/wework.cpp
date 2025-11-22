@@ -1,7 +1,6 @@
 #include "wework.h"
 
 #include <httpcpp/request.h>
-#include "utils/component.hpp"
 #include <boost/json.hpp>
 #include "utils/utils.h"
 

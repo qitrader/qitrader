@@ -7,7 +7,7 @@ set_languages("c++23")
 
 add_rules("mode.debug")
 
-target("BitCoinTrader")
+target("qitrader")
     set_kind("binary")
     add_includedirs("market/", "common/", "engine/", "strategy/", "notice/")
 

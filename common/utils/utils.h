@@ -42,6 +42,10 @@ struct transform<dec_float> {
      */
     static void trans(const bj::value &jv, dec_float &t) {
         if (jv.is_string()) {
+            if (jv.as_string().empty()) {
+                t = dec_float(0);
+                return;
+            }
             t = dec_float(jv.as_string().c_str());
         } else if (jv.is_double()) {
             t = dec_float(jv.as_double());

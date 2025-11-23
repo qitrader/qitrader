@@ -23,11 +23,11 @@ asio::awaitable<void> Testing::run() {
   // 查询持仓信息
   co_await on_request_position();
   
-  // 订阅BTC-USDT-SWAP的订单簿数据
-  co_await on_subscribe_book("BTC-USDT-SWAP");
+  // // 订阅BTC-USDT-SWAP的订单簿数据
+  // co_await on_subscribe_book("BTC-USDT-SWAP");
   
-  // 订阅BTC-USDT-SWAP的Tick数据
-  co_await on_subscribe_tick("BTC-USDT-SWAP");
+  // // 订阅BTC-USDT-SWAP的Tick数据
+  // co_await on_subscribe_tick("BTC-USDT-SWAP");
 
   boost::asio::steady_timer timer(executor);
   timer.expires_after(1s);
@@ -61,13 +61,18 @@ asio::awaitable<void> Testing::recv_position(engine::PositionDataPtr position) {
 
 // 接收订单簿数据并打印买卖盘信息
 asio::awaitable<void> Testing::recv_book(engine::BookPtr order) {
-  // LOG(INFO) << fmt::format("recv_book {}: ask {} bid {}", order->symbol, order->asks.size(), order->bids.size());
+  LOG(INFO) << fmt::format("recv_book {}: ask {} bid {}", order->symbol, order->asks.size(), order->bids.size());
 
   co_return;
 }
 
 asio::awaitable<void> Testing::recv_tick(engine::TickDataPtr ticker) {
-  // LOG(INFO) << fmt::format("recv_tick: {}", ticker->symbol);
+  LOG(INFO) << fmt::format("recv_tick: {}", ticker->symbol);
+  co_return;
+}
+
+asio::awaitable<void> Testing::recv_order(engine::OrderDataPtr order) {
+  LOG(INFO) << fmt::format("recv_order: {}", order->items.size());
   co_return;
 }
 

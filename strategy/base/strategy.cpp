@@ -25,6 +25,10 @@ asio::awaitable<void> Strategy::init() {
   _engine->register_callback<engine::TickData>(engine::EventType::kTick,
     std::bind(&Strategy::recv_tick, shared_from_this(), std::placeholders::_1));
   
+  // 注册订单数据事件回调
+  _engine->register_callback<engine::OrderData>(engine::EventType::kOrder,
+    std::bind(&Strategy::recv_order, shared_from_this(), std::placeholders::_1));
+  
   co_return;
 }
 
@@ -58,5 +62,7 @@ asio::awaitable<void> Strategy::on_subscribe_tick(const std::string& symbol) {
 asio::awaitable<void> Strategy::on_send_order(engine::OrderDataPtr order) {
   return _engine->on_event(engine::EventType::kSendOrder, order);
 }
+
+
 
 }  // namespace strategy::base

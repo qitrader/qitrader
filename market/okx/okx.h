@@ -129,7 +129,7 @@ class Okx : public base::Gateway {
 
   asio::awaitable<void> deal_account(const Account& msg);
   asio::awaitable<void> deal_position(const std::vector<PositionDetail>& msg);
-
+  asio::awaitable<void> deal_order(const std::vector<QueryOrderDetail>& msg);
   /**
    * @brief 登录私有WebSocket
    * @return asio::awaitable<void> 异步协程
@@ -142,11 +142,17 @@ class Okx : public base::Gateway {
 
   asio::awaitable<void> ws_private_subscribe_order();
 
+  asio::awaitable<void> ws_deal(std::shared_ptr<OkxWs> ws);
+
+  SendOrderRequest to_send_order_request(engine::OrderDataItemPtr order);
+  SendOrderRequest to_send_order_request_spot(engine::OrderDataItemPtr order);
+  SendOrderRequest to_send_order_request_swap(engine::OrderDataItemPtr order);
+
   ConcurrentMap<std::string, SingleMarket> markets_;
 
   OkxHttp http_;  ///< HTTP客户端，用于查询操作
-  OkxWs ws_public_;      ///< WebSocket客户端，用于接收实时数据
-  OkxWs ws_private_;     ///< WebSocket客户端，用于接收私有数据
+  std::shared_ptr<OkxWs> ws_public_;      ///< WebSocket客户端，用于接收实时数据
+  std::shared_ptr<OkxWs> ws_private_;     ///< WebSocket客户端，用于接收私有数据
 };
 
 }  // namespace market::okx

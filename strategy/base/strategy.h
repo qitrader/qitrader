@@ -105,6 +105,13 @@ public:
    */
   virtual asio::awaitable<void> recv_tick(engine::TickDataPtr ticker) = 0;
 
+  /**
+   * @brief 接收订单数据回调（纯虚函数，子类必须实现）
+   * @param order 订单数据
+   * @return asio::awaitable<void> 异步协程
+   */
+  virtual asio::awaitable<void> recv_order(engine::OrderDataPtr order) = 0;
+
 private:
   engine::EnginePtr _engine;  ///< 引擎指针
 };

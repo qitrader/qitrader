@@ -36,6 +36,8 @@ std::map<std::string, std::string> OkxHttpRequest::get_headers(
   headers["OK-ACCESS-SIGN"] = hash;
   headers["OK-ACCESS-TIMESTAMP"] = Common::time_format_iso(ts);
   headers["OK-ACCESS-PASSPHRASE"] = passphrase;
+  headers["User-Agent"] = "qitrader";
+  
   if (sim) {
     headers["x-simulated-trading"] = "1";
   }

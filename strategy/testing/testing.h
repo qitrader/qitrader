@@ -51,6 +51,9 @@ public:
   
   /// 接收并打印Tick数据
   asio::awaitable<void> recv_tick(engine::TickDataPtr ticker) override;
+
+  /// 接收并打印订单数据
+  asio::awaitable<void> recv_order(engine::OrderDataPtr order) override;
 };
 
 }  // namespace testing

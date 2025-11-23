@@ -156,7 +156,6 @@ typedef WsRequest<std::vector<WsLoginDetail>> WsLoginRequest;
 
 struct WsSubscibeAccountDetail {
   std::string channel;
-  std::string ccy;
 };
 
 typedef WsRequest<std::vector<WsSubscibeAccountDetail>> WsSubscibeAccountRequest;
@@ -178,6 +177,7 @@ typedef WsRequest<std::vector<WsSubscibeOrderDetail>> WsSubscibeOrderRequest;
 struct WsArg {
   std::string channel;
   std::string instId;
+  std::string ccy;
 };
 
 struct WsMessage {
@@ -278,7 +278,7 @@ struct transform<market::okx::WsMessage> {
       t.msg = jo.at("msg").as_string();
       transform<decltype(t.code)>::trans(jo.at("code"), t.code);
     } else if (t.event == "channel-conn-count") {
-      t.connCount = jo.at("connCount").as_int64();
+      transform<decltype(t.connCount)>::trans(jo.at("connCount"), t.connCount);
     }
   }
 
@@ -301,8 +301,12 @@ struct transform<market::okx::WsMessage> {
       auto data = std::vector<market::okx::PositionDetail>();
       transform<decltype(data)>::trans(jo.at("data"), data);
       t.data = data;
+    } else if (t.arg.channel == "orders") {
+      auto data = std::vector<market::okx::QueryOrderDetail>();
+      transform<decltype(data)>::trans(jo.at("data"), data);
+      t.data = data;
     } else {
-      throw std::runtime_error("invalid channel");
+      throw std::runtime_error(fmt::format("unknown channel: {}", t.arg.channel));
     }
   }
 };

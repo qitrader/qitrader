@@ -4,6 +4,7 @@
 #include <boost/asio/experimental/concurrent_channel.hpp>
 #include <memory>
 #include <string>
+#include <atomic>
 #include "utils/utils.h"
 #include "object.h"
 #include <map>
@@ -53,6 +54,18 @@ public:
    */
   Engine(asio::io_context& ctx, size_t channel_size = 1000);
   ~Engine();
+
+  /**
+   * @brief 停止引擎，发送退出事件
+   * @return asio::awaitable<void> 异步协程
+   */
+  asio::awaitable<void> stop();
+
+  /**
+   * @brief 检查引擎是否正在运行
+   * @return bool 是否运行中
+   */
+  bool is_running() const { return running_.load(); }
 
   /**
    * @brief 引擎主运行循环
@@ -109,6 +122,9 @@ private:
   
   /// 所有注册的组件列表
   std::vector<std::shared_ptr<Component>> components_;
+
+  /// 引擎运行状态标志
+  std::atomic<bool> running_;
 };
 
 typedef std::shared_ptr<Engine> EnginePtr;

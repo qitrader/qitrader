@@ -28,7 +28,7 @@ BitCoinTrader/
 ├── notice/           # 通知系统
 │   ├── base/         # 通知基础类
 │   └── wework/       # 企业微信通知
-├── stragy/           # 交易策略
+├── strategy/         # 交易策略
 │   ├── base/         # 策略基础类
 │   └── testing/      # 测试策略
 ├── repo/             # 依赖包管理

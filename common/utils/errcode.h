@@ -1,5 +1,5 @@
-#ifndef __COMMON_H
-#define __COMMON_H
+#ifndef __COMMON_UTILS_ERRCODE_H__
+#define __COMMON_UTILS_ERRCODE_H__
 
 #include <boost/system.hpp>
 
@@ -25,6 +25,10 @@ static std::string GetErrCodeString(ErrCode err) {
       return "API Return Error";
     case ErrCode::SSL_ERROR:
       return "SSL Error";
+    case ErrCode::Deserialize_Fail:
+      return "Deserialize Fail";
+    case ErrCode::Connect_Fail:
+      return "Connect Fail";
     default:
       return "Unknown Error";
   }
@@ -46,4 +50,4 @@ class RequestErrorCategory : public boost::system::error_category {
   std::string message(int ev) const override { return GetErrCodeString(static_cast<ErrCode>(ev)); }
 };
 
-#endif
+#endif  // __COMMON_UTILS_ERRCODE_H__

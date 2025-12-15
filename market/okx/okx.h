@@ -1,5 +1,5 @@
-#ifndef _BITCONITRADER_MARKET_OKX_OKX_H
-#define _BITCONITRADER_MARKET_OKX_OKX_H
+#ifndef __MARKET_OKX_OKX_H__
+#define __MARKET_OKX_OKX_H__
 
 /**
  * @file okx.h
@@ -157,4 +157,4 @@ class Okx : public base::Gateway {
 
 }  // namespace market::okx
 
-#endif  // _BITCONITRADER_MARKET_OKX_OKX_H
+#endif  // __MARKET_OKX_OKX_H__

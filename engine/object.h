@@ -1,5 +1,5 @@
-#ifndef BITCOINTRADER_MARKET_BASE_OBJECT_H_
-#define BITCOINTRADER_MARKET_BASE_OBJECT_H_
+#ifndef __ENGINE_OBJECT_H__
+#define __ENGINE_OBJECT_H__
 
 /**
  * @file object.h
@@ -311,4 +311,4 @@ typedef std::shared_ptr<const SubscribeData> SubscribeDataPtr;
 
 }  // namespace engine
 
-#endif  // BITCOINTRADER_MARKET_BASE_OBJECT_H_
+#endif  // __ENGINE_OBJECT_H__

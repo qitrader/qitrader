@@ -1,5 +1,5 @@
-#ifndef __MARKET_OKX_OKX_H__
-#define __MARKET_OKX_OKX_H__
+#ifndef QITRADER_MARKET_OKX_OKX_H_
+#define QITRADER_MARKET_OKX_OKX_H_
 
 /**
  * @file okx.h

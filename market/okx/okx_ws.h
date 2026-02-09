@@ -1,6 +1,5 @@
-#ifndef _MARKET_OKX_OKX_WS_H_
-#define _MARKET_OKX_OKX_WS_H_
-
+#ifndef QITRADER_MARKET_OKX_OKX_WS_H_
+#define QITRADER_MARKET_OKX_OKX_WS_H_
 #include <string>
 #include <vector>
 

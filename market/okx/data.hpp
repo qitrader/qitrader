@@ -1,6 +1,5 @@
-#ifndef MARKET_OKX_DATA_H_
-#define MARKET_OKX_DATA_H_
-
+#ifndef QITRADER_MARKET_OKX_DATA_HPP_
+#define QITRADER_MARKET_OKX_DATA_HPP_
 #include <utils/utils.h>
 
 #include <string>

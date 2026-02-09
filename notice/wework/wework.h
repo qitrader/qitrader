@@ -1,6 +1,5 @@
-#ifndef __NOTICE_WEWORK_WEWORK_API_H__
-#define __NOTICE_WEWORK_WEWORK_API_H__
-
+#ifndef QITRADER_NOTICE_WEWORK_WEWORK_H_
+#define QITRADER_NOTICE_WEWORK_WEWORK_H_
 #include <boost/asio/awaitable.hpp>
 #include <string>
 

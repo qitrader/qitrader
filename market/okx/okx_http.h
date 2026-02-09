@@ -1,6 +1,5 @@
-#ifndef MARKET_OKX_OKX_HTTP_H_
-#define MARKET_OKX_OKX_HTTP_H_
-
+#ifndef QITRADER_MARKET_OKX_OKX_HTTP_H_
+#define QITRADER_MARKET_OKX_OKX_HTTP_H_
 #include <memory>
 #include <string>
 #include "utils/utils.h"

@@ -1,5 +1,5 @@
-#ifndef __COMMON_CONTEXT_CONTEXT_H__
-#define __COMMON_CONTEXT_CONTEXT_H__
+#ifndef QITRADER_COMMON_CONTEXT_CONTEXT_H_
+#define QITRADER_COMMON_CONTEXT_CONTEXT_H_
 
 /**
  * @file context.h
@@ -192,4 +192,4 @@ void co_spawn_deteched(asio::any_io_executor& exec, ContextPtr ctx, std::functio
 
 }
 
-#endif
+#endif  // QITRADER_COMMON_CONTEXT_CONTEXT_H_

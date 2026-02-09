@@ -1,5 +1,5 @@
-#ifndef __MARKET_BASE_ENGINE_H__
-#define __MARKET_BASE_ENGINE_H__
+#ifndef QITRADER_ENGINE_ENGINE_H_
+#define QITRADER_ENGINE_ENGINE_H_
 
 #include <boost/asio/experimental/concurrent_channel.hpp>
 #include <memory>
@@ -65,7 +65,7 @@ public:
    * @brief 检查引擎是否正在运行
    * @return bool 是否运行中
    */
-  bool is_running() const { return running_.load(); }
+  bool is_running() const { return m_running.load(); }
 
   /**
    * @brief 引擎主运行循环
@@ -100,7 +100,7 @@ public:
   template<typename EventDataType>
   void register_callback(EventType type, std::function<asio::awaitable<void>(std::shared_ptr<const EventDataType>)> callback) {
     // 将类型化的回调函数封装为通用回调，并添加到回调列表
-    callbacks_[type].push_back([callback](EventPtr event) -> asio::awaitable<void> {
+    m_callbacks[type].push_back([callback](EventPtr event) -> asio::awaitable<void> {
       auto data = std::dynamic_pointer_cast<const EventDataType>(event->data);
       co_await callback(data);
       co_return;
@@ -115,16 +115,16 @@ public:
   
 private:
   /// 并发事件通道，用于在协程间传递事件，容量为1000
-  boost::asio::experimental::concurrent_channel<void(boost::system::error_code, EventPtr)> channel_;
+  boost::asio::experimental::concurrent_channel<void(boost::system::error_code, EventPtr)> m_channel;
   
   /// 事件类型到回调函数列表的映射
-  std::map<EventType, std::vector<EventCallback>> callbacks_;
+  std::map<EventType, std::vector<EventCallback>> m_callbacks;
   
   /// 所有注册的组件列表
-  std::vector<std::shared_ptr<Component>> components_;
+  std::vector<std::shared_ptr<Component>> m_components;
 
   /// 引擎运行状态标志
-  std::atomic<bool> running_;
+  std::atomic<bool> m_running;
 };
 
 typedef std::shared_ptr<Engine> EnginePtr;

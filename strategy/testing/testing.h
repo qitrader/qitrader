@@ -1,6 +1,5 @@
-#ifndef __STRAGE_TESTING_TESTING_H__
-#define __STRAGE_TESTING_TESTING_H__
-
+#ifndef QITRADER_STRATEGY_TESTING_TESTING_H_
+#define QITRADER_STRATEGY_TESTING_TESTING_H_
 /**
  * @file testing.h
  * @brief 测试策略实现

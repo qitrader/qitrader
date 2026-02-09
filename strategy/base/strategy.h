@@ -1,5 +1,5 @@
-#ifndef __STRATEGY_BASE_STRATEGY_H__
-#define __STRATEGY_BASE_STRATEGY_H__
+#ifndef QITRADER_STRATEGY_BASE_STRATEGY_H_
+#define QITRADER_STRATEGY_BASE_STRATEGY_H_
 
 /**
  * @file strategy.h
@@ -113,7 +113,7 @@ public:
   virtual asio::awaitable<void> recv_order(engine::OrderDataPtr order) = 0;
 
 private:
-  engine::EnginePtr _engine;  ///< 引擎指针
+  std::weak_ptr<engine::Engine> m_engine;  ///< 引擎弱引用，避免循环引用
 };
 
 }  // namespace base

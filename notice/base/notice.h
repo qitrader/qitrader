@@ -1,5 +1,5 @@
-#ifndef BITCOINTRADER_NOTICE_BASE_NOTICE_H_
-#define BITCOINTRADER_NOTICE_BASE_NOTICE_H_
+#ifndef QITRADER_NOTICE_BASE_NOTICE_H_
+#define QITRADER_NOTICE_BASE_NOTICE_H_
 
 #include "engine.h"
 #include "utils/utils.h"
@@ -13,9 +13,9 @@ public:
 
   virtual asio::awaitable<void> send_message(engine::MessageDataPtr msg) = 0;
 private:
-  engine::EnginePtr engine_;
+  std::weak_ptr<engine::Engine> m_engine;  ///< 引擎弱引用，避免循环引用
 };
 
 }
 
-#endif  // BITCOINTRADER_NOTICE_BASE_NOTICE_H_
+#endif  // QITRADER_NOTICE_BASE_NOTICE_H_

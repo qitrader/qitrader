@@ -1,5 +1,5 @@
-#ifndef __COMMON_OPTIONS_H__
-#define __COMMON_OPTIONS_H__
+#ifndef QITRADER_COMMON_CONFIG_OPTIONS_H_
+#define QITRADER_COMMON_CONFIG_OPTIONS_H_
 
 #include <boost/program_options.hpp>
 #include <boost/program_options/options_description.hpp>
@@ -54,4 +54,4 @@ private:
 
 #define AppOptions Common::SingletonPtr<Config::OptionsImpl>::get_instance()
 
-#endif
+#endif  // QITRADER_COMMON_CONFIG_OPTIONS_H_

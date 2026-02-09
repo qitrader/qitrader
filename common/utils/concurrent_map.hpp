@@ -1,5 +1,5 @@
-#ifndef CONCURRENT_MAP_HPP
-#define CONCURRENT_MAP_HPP
+#ifndef QITRADER_COMMON_UTILS_CONCURRENT_MAP_HPP_
+#define QITRADER_COMMON_UTILS_CONCURRENT_MAP_HPP_
 
 #include <map>
 #include <functional>

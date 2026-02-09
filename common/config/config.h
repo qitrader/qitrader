@@ -1,5 +1,5 @@
-#ifndef __CONFIG_COMMON_CONFIG_H__
-#define __CONFIG_COMMON_CONFIG_H__
+#ifndef QITRADER_COMMON_CONFIG_CONFIG_H_
+#define QITRADER_COMMON_CONFIG_CONFIG_H_
 
 #include <boost/multiprecision/cpp_dec_float.hpp>
 #include <boost/property_tree/ini_parser.hpp>
@@ -79,4 +79,4 @@ class Config {
 
 #define AppConfig Common::SingletonPtr<Config::Config>::get_instance()
 
-#endif
+#endif  // QITRADER_COMMON_CONFIG_CONFIG_H_

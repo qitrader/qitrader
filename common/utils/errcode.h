@@ -1,5 +1,5 @@
-#ifndef __COMMON_UTILS_ERRCODE_H__
-#define __COMMON_UTILS_ERRCODE_H__
+#ifndef QITRADER_COMMON_UTILS_ERRCODE_H_
+#define QITRADER_COMMON_UTILS_ERRCODE_H_
 
 #include <boost/system.hpp>
 

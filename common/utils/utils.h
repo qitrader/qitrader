@@ -1,5 +1,5 @@
-#ifndef __COMMON_UTILS_H
-#define __COMMON_UTILS_H
+#ifndef QITRADER_COMMON_UTILS_UTILS_H_
+#define QITRADER_COMMON_UTILS_UTILS_H_
 
 /**
  * @file utils.h

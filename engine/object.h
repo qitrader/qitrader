@@ -1,5 +1,5 @@
-#ifndef __ENGINE_OBJECT_H__
-#define __ENGINE_OBJECT_H__
+#ifndef QITRADER_ENGINE_OBJECT_H_
+#define QITRADER_ENGINE_OBJECT_H_
 
 /**
  * @file object.h

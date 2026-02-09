@@ -56,7 +56,6 @@ asio::awaitable<void> Engine::run() {
   LOG(INFO) << "Engine started";
 
   // 第三阶段：进入主事件循环，从通道中接收并分发事件
-  auto executor = co_await asio::this_coro::executor;
   while (m_running.load()) {
     try {
       // 从通道中异步接收事件
@@ -69,39 +68,32 @@ asio::awaitable<void> Engine::run() {
         break;
       }
       
-      // 获取该事件类型对应的所有回调函数
+      // 获取该事件类型对应的所有回调函数，串行执行保证顺序
       auto& callbacks = m_callbacks[event->type];
-      // 为每个回调函数启动一个独立的协程
       for (auto& callback : callbacks) {
-        // 异步执行回调，并捕获异常防止单个回调失败影响整个系统
-        asio::co_spawn(executor, [callback, event]() -> asio::awaitable<void> {
-          try {
-            co_await callback(event);
-          } catch (boost::system::system_error &e) {
-            LOG(ERROR) << fmt::format("Type {} callback error: {}", int(event->type), e.what());
-          } catch (std::runtime_error &e) {
-            LOG(ERROR) << fmt::format("Type {} callback error: {}", int(event->type), e.what());
-          } catch (...) {
-            LOG(ERROR) << fmt::format("Type {} callback error: unknown error", int(event->type)); 
-          }
-          co_return;
-        }, asio::detached);
+        try {
+          co_await callback(event);
+        } catch (boost::system::system_error &e) {
+          LOG(ERROR) << fmt::format("Type {} callback error: {}", int(event->type), e.what());
+        } catch (std::runtime_error &e) {
+          LOG(ERROR) << fmt::format("Type {} callback error: {}", int(event->type), e.what());
+        } catch (...) {
+          LOG(ERROR) << fmt::format("Type {} callback error: unknown error", int(event->type)); 
+        }
       }
 
-      // 处理注册了kAll类型的回调，这些回调会接收所有类型的事件
+      // 处理注册了kAll类型的回调
       auto& all_callbacks = m_callbacks[EventType::kAll];
       for (auto& callback : all_callbacks) {
-        asio::co_spawn(executor, [callback, event]() -> asio::awaitable<void> {
-          try {
-            co_await callback(event);
-          } catch (boost::system::system_error &e) {
-            LOG(ERROR) << fmt::format("Type {} callback error: {}", int(event->type), e.what());
-          } catch (std::runtime_error &e) {
-            LOG(ERROR) << fmt::format("Type {} callback error: {}", int(event->type), e.what());
-          } catch (...) {
-            LOG(ERROR) << fmt::format("Type {} callback error: unknown error", int(event->type)); 
-          }
-        }, asio::detached);
+        try {
+          co_await callback(event);
+        } catch (boost::system::system_error &e) {
+          LOG(ERROR) << fmt::format("Type {} callback error: {}", int(event->type), e.what());
+        } catch (std::runtime_error &e) {
+          LOG(ERROR) << fmt::format("Type {} callback error: {}", int(event->type), e.what());
+        } catch (...) {
+          LOG(ERROR) << fmt::format("Type {} callback error: unknown error", int(event->type)); 
+        }
       }
     } catch (const boost::system::system_error& e) {
       // Check if channel is closed or operation was cancelled
@@ -131,7 +123,19 @@ asio::awaitable<void> Engine::stop() {
   }
   
   LOG(INFO) << "Stopping engine...";
-  // 发送退出事件
+  
+  // 先通知所有组件进行资源清理
+  for (auto& component : m_components) {
+    try {
+      co_await component->shutdown();
+    } catch (const std::exception& e) {
+      LOG(ERROR) << fmt::format("Component shutdown error: {}", e.what());
+    } catch (...) {
+      LOG(ERROR) << "Component shutdown error: unknown error";
+    }
+  }
+  
+  // 发送退出事件，终止主事件循环
   auto quit_event = std::make_shared<MessageData>("Engine shutdown");
   co_await on_event(EventType::kQuit, quit_event);
 }

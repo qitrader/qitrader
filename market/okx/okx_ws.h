@@ -11,7 +11,7 @@
 
 namespace market::okx {
 
-class OkxWs {
+class OkxWs : public std::enable_shared_from_this<OkxWs> {
  public:
   OkxWs(boost::asio::any_io_executor& ctx, size_t channel_size);
   OkxWs(boost::asio::any_io_executor& ctx, size_t channel_size, std::string uri);

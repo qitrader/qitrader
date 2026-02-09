@@ -21,6 +21,8 @@ namespace engine {
  */
 class Component {
 public:
+  virtual ~Component() = default;
+  
   /**
    * @brief 组件运行主逻辑，在引擎启动后被调用
    * @return asio::awaitable<void> 异步协程
@@ -32,6 +34,12 @@ public:
    * @return asio::awaitable<void> 异步协程
    */
   virtual asio::awaitable<void> init() = 0;
+
+  /**
+   * @brief 组件关闭，在引擎停止时被调用，用于释放资源
+   * @return asio::awaitable<void> 异步协程
+   */
+  virtual asio::awaitable<void> shutdown() { co_return; }
 };
 
 /// 事件回调函数类型，用于处理特定类型的事件

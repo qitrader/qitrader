@@ -1,6 +1,11 @@
 #include "okx.h"
 
 #include <boost/asio/experimental/parallel_group.hpp>
+#include <boost/asio/steady_timer.hpp>
+#include <chrono>
+#include <algorithm>
+
+using namespace std::chrono_literals;
 
 namespace market::okx {
 
@@ -119,9 +124,14 @@ asio::awaitable<void> Okx::run() {
 }
 
 asio::awaitable<void> Okx::watch_private() {
+  auto executor = co_await asio::this_coro::executor;
+  int retry_count = 0;
+  constexpr int max_retry = 20;
+  
   for (;;) {
     try {
       co_await ws_deal(ws_private_);
+      retry_count = 0;  // 成功处理后重置重试计数
     } catch (boost::system::system_error& e) {
       LOG(ERROR) << fmt::format("watch_private error: {}", e.what());
     } catch (std::runtime_error& e) {
@@ -131,6 +141,18 @@ asio::awaitable<void> Okx::watch_private() {
     } catch (...) {
       LOG(ERROR) << fmt::format("watch_private error: unknown error");
     }
+
+    // 指数退避重连：1s, 2s, 4s, 8s, ... 最大 60s
+    retry_count++;
+    if (retry_count > max_retry) {
+      LOG(ERROR) << fmt::format("watch_private: 达到最大重试次数 {}，停止重连", max_retry);
+      co_return;
+    }
+    auto delay = std::min(int64_t(1) << (retry_count - 1), int64_t(60));
+    LOG(WARNING) << fmt::format("watch_private: {}s 后进行第 {} 次重试", delay, retry_count);
+    boost::asio::steady_timer timer(executor);
+    timer.expires_after(std::chrono::seconds(delay));
+    co_await timer.async_wait(asio::use_awaitable);
   }
 
   co_return;
@@ -180,18 +202,35 @@ asio::awaitable<void> Okx::ws_deal(std::shared_ptr<OkxWs> ws) {
 }
 
 asio::awaitable<void> Okx::watch_public() {
+  auto executor = co_await asio::this_coro::executor;
+  int retry_count = 0;
+  constexpr int max_retry = 20;
+
   for (;;) {
     try {
       co_await ws_deal(ws_public_);
+      retry_count = 0;  // 成功处理后重置重试计数
     } catch (boost::system::system_error& e) {
       LOG(ERROR) << fmt::format("watch_public error: {}", e.what());
     } catch (std::runtime_error& e) {
       LOG(ERROR) << fmt::format("watch_public error: {}", e.what());
     } catch (std::exception& e) {
-      LOG(ERROR) << fmt::format("watch_private error: {}", e.what());
+      LOG(ERROR) << fmt::format("watch_public error: {}", e.what());
     } catch (...) {
       LOG(ERROR) << fmt::format("watch_public error: unknown error");
     }
+
+    // 指数退避重连：1s, 2s, 4s, 8s, ... 最大 60s
+    retry_count++;
+    if (retry_count > max_retry) {
+      LOG(ERROR) << fmt::format("watch_public: 达到最大重试次数 {}，停止重连", max_retry);
+      co_return;
+    }
+    auto delay = std::min(int64_t(1) << (retry_count - 1), int64_t(60));
+    LOG(WARNING) << fmt::format("watch_public: {}s 后进行第 {} 次重试", delay, retry_count);
+    boost::asio::steady_timer timer(executor);
+    timer.expires_after(std::chrono::seconds(delay));
+    co_await timer.async_wait(asio::use_awaitable);
   }
 
   co_return;
@@ -227,7 +266,7 @@ asio::awaitable<void> Okx::deal_book(const std::string& symbol, const std::vecto
     }
 
     // 保存最新的订单簿，供关联到Tick数据
-    markets_.apply([item](std::map<std::string, SingleMarket> map) { map[item->symbol].last_book = item; });
+    markets_.apply([&item](std::map<std::string, SingleMarket>& map) { map[item->symbol].last_book = item; });
     // 发送订单簿数据到引擎
     co_await on_book(item);
   }
@@ -260,7 +299,7 @@ asio::awaitable<void> Okx::deal_tick(const std::string& symbol, const std::vecto
     item->low_price = tick_item.low24h;          // 24h最低价
 
     // 保存最新的Tick，供关联到订单簿数据
-    markets_.apply([item](std::map<std::string, SingleMarket> map) {
+    markets_.apply([&item](std::map<std::string, SingleMarket>& map) {
       item->order_book = map[item->symbol].last_book;
       map[item->symbol].last_tick = item;
     });

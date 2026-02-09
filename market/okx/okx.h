@@ -18,10 +18,11 @@
 #include "okx_http.h"
 #include "okx_ws.h"
 #include "utils/concurrent_map.hpp"
+#include <boost/asio/steady_timer.hpp>
 
 namespace market::okx {
 
-struct SingleMarket : public std::enable_shared_from_this<SingleMarket> {
+struct SingleMarket {
   std::string symbol;
   engine::BookPtr last_book;      ///< 最近一次接收的订单簿数据
   engine::TickDataPtr last_tick;  ///< 最近一次接收的Tick数据

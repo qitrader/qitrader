@@ -15,6 +15,7 @@
 #include <boost/asio.hpp>
 #include <boost/asio/detached.hpp>
 #include <boost/asio/io_context.hpp>
+#include <boost/asio/signal_set.hpp>
 #include <boost/system.hpp>
 #include <boost/system/system_error.hpp>
 
@@ -74,6 +75,15 @@ int main(int argc, char* argv[]) {
 
   // 启动引擎协程，开始处理事件
   asio::co_spawn(io_context, engine->run(), asio::detached);
+
+  // 注册信号处理，捕获 SIGINT(Ctrl+C) 和 SIGTERM 实现优雅关闭
+  boost::asio::signal_set signals(io_context, SIGINT, SIGTERM);
+  signals.async_wait([&engine, &io_context](const boost::system::error_code& ec, int signal_number) {
+    if (!ec) {
+      LOG(INFO) << fmt::format("收到信号 {}，正在优雅关闭...", signal_number);
+      asio::co_spawn(io_context, engine->stop(), asio::detached);
+    }
+  });
 
   // 运行IO事件循环，阻塞直到所有异步操作完成
   io_context.run();

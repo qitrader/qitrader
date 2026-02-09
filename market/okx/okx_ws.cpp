@@ -39,10 +39,11 @@ asio::awaitable<void> OkxWs::connect() {
 
   co_await ws_->connect();
 
+  auto self = shared_from_this();
   co_spawn(
-      ctx, [this] { return read_loop(); }, asio::detached);
+      ctx, [self] { return self->read_loop(); }, asio::detached);
   co_spawn(
-      ctx, [this] { return write_loop(); }, asio::detached);
+      ctx, [self] { return self->write_loop(); }, asio::detached);
 
   co_return;
 }

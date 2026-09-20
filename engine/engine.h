@@ -1,9 +1,10 @@
-#ifndef __MARKET_BASE_ENGINE_H__
-#define __MARKET_BASE_ENGINE_H__
+#ifndef QITRADER_ENGINE_ENGINE_H_
+#define QITRADER_ENGINE_ENGINE_H_
 
 #include <boost/asio/experimental/concurrent_channel.hpp>
 #include <memory>
 #include <string>
+#include <atomic>
 #include "utils/utils.h"
 #include "object.h"
 #include <map>
@@ -20,6 +21,8 @@ namespace engine {
  */
 class Component {
 public:
+  virtual ~Component() = default;
+  
   /**
    * @brief 组件运行主逻辑，在引擎启动后被调用
    * @return asio::awaitable<void> 异步协程
@@ -31,6 +34,12 @@ public:
    * @return asio::awaitable<void> 异步协程
    */
   virtual asio::awaitable<void> init() = 0;
+
+  /**
+   * @brief 组件关闭，在引擎停止时被调用，用于释放资源
+   * @return asio::awaitable<void> 异步协程
+   */
+  virtual asio::awaitable<void> shutdown() { co_return; }
 };
 
 /// 事件回调函数类型，用于处理特定类型的事件
@@ -55,6 +64,30 @@ public:
   ~Engine();
 
   /**
+   * @brief 停止引擎，发送退出事件
+   * @return asio::awaitable<void> 异步协程
+   */
+  asio::awaitable<void> stop();
+
+  /**
+   * @brief 检查引擎是否正在运行
+   * @return bool 是否运行中
+   */
+  bool is_running() const { return m_running.load(); }
+
+  /**
+   * @brief 检查引擎是否正在停止或已停止。
+   *
+   * 异步适配器和运行时应使用该状态，避免在停止阶段继续投递或执行事件。
+   */
+  bool is_stopping() const { return m_stopping.load(); }
+
+  /**
+   * @brief 获取事件引擎执行器，供异步适配器投递命令
+   */
+  asio::any_io_executor executor() { return m_channel.get_executor(); }
+
+  /**
    * @brief 引擎主运行循环
    * 
    * 执行流程：
@@ -75,6 +108,14 @@ public:
   asio::awaitable<void> on_event(EventType etype, std::shared_ptr<const BaseData> event);
 
   /**
+   * @brief 发送事件并等待所有回调处理完成
+   * @param etype 事件类型
+   * @param event 事件数据
+   * @return asio::awaitable<void> 所有回调完成后的异步协程
+   */
+  asio::awaitable<void> on_event_sync(EventType etype, std::shared_ptr<const BaseData> event);
+
+  /**
    * @brief 注册事件回调函数
    * 
    * 允许组件注册特定类型事件的处理函数。
@@ -87,7 +128,7 @@ public:
   template<typename EventDataType>
   void register_callback(EventType type, std::function<asio::awaitable<void>(std::shared_ptr<const EventDataType>)> callback) {
     // 将类型化的回调函数封装为通用回调，并添加到回调列表
-    callbacks_[type].push_back([callback](EventPtr event) -> asio::awaitable<void> {
+    m_callbacks[type].push_back([callback](EventPtr event) -> asio::awaitable<void> {
       auto data = std::dynamic_pointer_cast<const EventDataType>(event->data);
       co_await callback(data);
       co_return;
@@ -102,13 +143,22 @@ public:
   
 private:
   /// 并发事件通道，用于在协程间传递事件，容量为1000
-  boost::asio::experimental::concurrent_channel<void(boost::system::error_code, EventPtr)> channel_;
+  boost::asio::experimental::concurrent_channel<void(boost::system::error_code, EventPtr)> m_channel;
   
   /// 事件类型到回调函数列表的映射
-  std::map<EventType, std::vector<EventCallback>> callbacks_;
+  std::map<EventType, std::vector<EventCallback>> m_callbacks;
   
   /// 所有注册的组件列表
-  std::vector<std::shared_ptr<Component>> components_;
+  std::vector<std::shared_ptr<Component>> m_components;
+
+  /// 引擎运行状态标志
+  std::atomic<bool> m_running;
+
+  /// 引擎停止阶段标志，停止请求发出后为 true
+  std::atomic<bool> m_stopping{false};
+
+  /// 停止请求标志，保证 stop() 幂等
+  std::atomic<bool> m_stop_requested;
 };
 
 typedef std::shared_ptr<Engine> EnginePtr;

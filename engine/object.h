@@ -1,5 +1,5 @@
-#ifndef BITCOINTRADER_MARKET_BASE_OBJECT_H_
-#define BITCOINTRADER_MARKET_BASE_OBJECT_H_
+#ifndef QITRADER_ENGINE_OBJECT_H_
+#define QITRADER_ENGINE_OBJECT_H_
 
 /**
  * @file object.h
@@ -14,6 +14,9 @@
 
 #include <memory>
 #include <string>
+
+#include <boost/asio/experimental/concurrent_channel.hpp>
+#include <boost/asio/steady_timer.hpp>
 
 #include "utils/utils.h"
 
@@ -43,12 +46,14 @@ enum class EventType {
 
   kSubscribeTick,  ///< 订阅Tick数据请求
   kTick,           ///< Tick数据事件
+  kBar,            ///< K线数据事件
 
   kSubscribeBook,  ///< 订阅订单簿请求
   kBook,           ///< 订单簿数据事件
 
-  kSendOrder,   ///< 发送订单请求
-  kQueryOrder,  ///< 查询订单请求
+  kSendOrder,    ///< 发送订单请求
+  kCancelOrder,  ///< 取消订单请求
+  kQueryOrder,   ///< 查询订单请求
   kOrder,       ///< 订单数据事件
 
   kTrade,  ///< 成交数据事件
@@ -65,6 +70,15 @@ enum class EventType {
 };
 
 /**
+ * @brief 同步事件的完成信号通道
+ *
+ * 使用容量为 1 的缓冲通道而非定时器取消：完成信号先写入缓冲区，
+ * 等待方无论何时开始等待都能立即取到，避免"先取消、后等待"导致永久挂起。
+ */
+using CompletionChannel =
+    boost::asio::experimental::concurrent_channel<void(boost::system::error_code)>;
+
+/**
  * @brief 事件对象，封装事件类型和事件数据
  */
 class Event : public std::enable_shared_from_this<Event> {
@@ -75,6 +89,7 @@ class Event : public std::enable_shared_from_this<Event> {
   }
   EventType type;                        ///< 事件类型
   std::shared_ptr<const BaseData> data;  ///< 事件数据
+  std::shared_ptr<CompletionChannel> completion;  ///< 同步事件完成通知
 };
 
 typedef std::shared_ptr<const Event> EventPtr;
@@ -127,7 +142,7 @@ class TickData : public BaseData {
  */
 class BarData : public BaseData {
  public:
-  int64_t interval;  ///< K线周期（秒）
+  int64_t interval{0};  ///< K线周期（秒）
 
   dec_float volume;  ///< 成交量
 
@@ -135,7 +150,11 @@ class BarData : public BaseData {
   dec_float high_price;   ///< 最高价
   dec_float low_price;    ///< 最低价
   dec_float close_price;  ///< 收盘价
+
+  const static EventType type = EventType::kBar;
 };
+
+typedef std::shared_ptr<const BarData> BarDataPtr;
 
 /**
  * @brief 交易方向
@@ -166,13 +185,15 @@ class OrderDataItem : public BaseData {
  public:
   std::string order_id;  ///< 订单ID
 
-  Direction direction;      ///< 交易方向
-  dec_float price;          ///< 订单价格
-  dec_float volume;         ///< 订单数量
-  dec_float filled_volume;  ///< 已成交数量
+  Direction direction{Direction::BUY};      ///< 交易方向
+  dec_float price{0};                      ///< 订单价格
+  dec_float volume{0};                     ///< 订单数量
+  dec_float filled_volume{0};              ///< 已成交数量
 
-  OrderType otype;     ///< 订单类型
-  OrderStatus status;  ///< 订单状态
+  OrderType otype{OrderType::LIMIT};       ///< 订单类型
+  OrderStatus status{OrderStatus::SUBMITTING};  ///< 订单状态
+
+  bool reduce_only{false};  ///< 只减仓标记：为真时不允许开新仓，由交易所或撮合器保证
 };
 
 typedef std::shared_ptr<const OrderDataItem> OrderDataItemPtr;
@@ -311,4 +332,4 @@ typedef std::shared_ptr<const SubscribeData> SubscribeDataPtr;
 
 }  // namespace engine
 
-#endif  // BITCOINTRADER_MARKET_BASE_OBJECT_H_
+#endif  // __ENGINE_OBJECT_H__

@@ -1,6 +1,11 @@
 #include "okx.h"
 
 #include <boost/asio/experimental/parallel_group.hpp>
+#include <boost/asio/steady_timer.hpp>
+#include <chrono>
+#include <algorithm>
+
+using namespace std::chrono_literals;
 
 namespace market::okx {
 
@@ -119,9 +124,17 @@ asio::awaitable<void> Okx::run() {
 }
 
 asio::awaitable<void> Okx::watch_private() {
+  auto executor = co_await asio::this_coro::executor;
+  int retry_count = 0;
+  constexpr int max_retry = 20;
+  
   for (;;) {
     try {
       co_await ws_deal(ws_private_);
+      retry_count = 0;  // 成功处理后重置重试计数
+      // 成功读到一条消息后立即继续读取，
+      // 否则会误走退避逻辑，把推送强制限速成每秒一条。
+      continue;
     } catch (boost::system::system_error& e) {
       LOG(ERROR) << fmt::format("watch_private error: {}", e.what());
     } catch (std::runtime_error& e) {
@@ -131,6 +144,18 @@ asio::awaitable<void> Okx::watch_private() {
     } catch (...) {
       LOG(ERROR) << fmt::format("watch_private error: unknown error");
     }
+
+    // 指数退避重连：1s, 2s, 4s, 8s, ... 最大 60s
+    retry_count++;
+    if (retry_count > max_retry) {
+      LOG(ERROR) << fmt::format("watch_private: 达到最大重试次数 {}，停止重连", max_retry);
+      co_return;
+    }
+    auto delay = std::min(int64_t(1) << (retry_count - 1), int64_t(60));
+    LOG(WARNING) << fmt::format("watch_private: {}s 后进行第 {} 次重试", delay, retry_count);
+    boost::asio::steady_timer timer(executor);
+    timer.expires_after(std::chrono::seconds(delay));
+    co_await timer.async_wait(asio::use_awaitable);
   }
 
   co_return;
@@ -180,18 +205,38 @@ asio::awaitable<void> Okx::ws_deal(std::shared_ptr<OkxWs> ws) {
 }
 
 asio::awaitable<void> Okx::watch_public() {
+  auto executor = co_await asio::this_coro::executor;
+  int retry_count = 0;
+  constexpr int max_retry = 20;
+
   for (;;) {
     try {
       co_await ws_deal(ws_public_);
+      retry_count = 0;  // 成功处理后重置重试计数
+      // 成功读到一条消息后立即继续读取，
+      // 否则会误走退避逻辑，把行情强制限速成每秒一条。
+      continue;
     } catch (boost::system::system_error& e) {
       LOG(ERROR) << fmt::format("watch_public error: {}", e.what());
     } catch (std::runtime_error& e) {
       LOG(ERROR) << fmt::format("watch_public error: {}", e.what());
     } catch (std::exception& e) {
-      LOG(ERROR) << fmt::format("watch_private error: {}", e.what());
+      LOG(ERROR) << fmt::format("watch_public error: {}", e.what());
     } catch (...) {
       LOG(ERROR) << fmt::format("watch_public error: unknown error");
     }
+
+    // 指数退避重连：1s, 2s, 4s, 8s, ... 最大 60s
+    retry_count++;
+    if (retry_count > max_retry) {
+      LOG(ERROR) << fmt::format("watch_public: 达到最大重试次数 {}，停止重连", max_retry);
+      co_return;
+    }
+    auto delay = std::min(int64_t(1) << (retry_count - 1), int64_t(60));
+    LOG(WARNING) << fmt::format("watch_public: {}s 后进行第 {} 次重试", delay, retry_count);
+    boost::asio::steady_timer timer(executor);
+    timer.expires_after(std::chrono::seconds(delay));
+    co_await timer.async_wait(asio::use_awaitable);
   }
 
   co_return;
@@ -227,7 +272,7 @@ asio::awaitable<void> Okx::deal_book(const std::string& symbol, const std::vecto
     }
 
     // 保存最新的订单簿，供关联到Tick数据
-    markets_.apply([item](std::map<std::string, SingleMarket> map) { map[item->symbol].last_book = item; });
+    markets_.apply([&item](std::map<std::string, SingleMarket>& map) { map[item->symbol].last_book = item; });
     // 发送订单簿数据到引擎
     co_await on_book(item);
   }
@@ -260,7 +305,7 @@ asio::awaitable<void> Okx::deal_tick(const std::string& symbol, const std::vecto
     item->low_price = tick_item.low24h;          // 24h最低价
 
     // 保存最新的Tick，供关联到订单簿数据
-    markets_.apply([item](std::map<std::string, SingleMarket> map) {
+    markets_.apply([&item](std::map<std::string, SingleMarket>& map) {
       item->order_book = map[item->symbol].last_book;
       map[item->symbol].last_tick = item;
     });
@@ -277,19 +322,27 @@ asio::awaitable<void> Okx::deal_order(const std::vector<QueryOrderDetail>& msg) 
     co_return;
   }
 
-  auto order = std::make_shared<engine::OrderData>();
-  // 解析HTTP API响应中的订单数据
-  auto order_data = msg;
   auto item = std::make_shared<engine::OrderData>();
-  item->symbol = order_data[0].instId;  // 交易对
-  item->exchange = name();           // 交易所
+  item->symbol = msg[0].instId;  // 交易对
+  item->exchange = name();       // 交易所
   // 遍历所有订单数据
-  for (auto& order_item : order_data) {
+  for (auto& order_item : msg) {
     auto order_data_item = std::make_shared<engine::OrderDataItem>();
     order_data_item->order_id = order_item.ordId;
-    order_data_item->price = order_item.avgPx;
+    order_data_item->price = order_item.px;  // 委托价，而非成交均价
     order_data_item->volume = order_item.sz;
+    order_data_item->filled_volume = order_item.accFillSz;
     order_data_item->direction = order_item.side == "buy" ? engine::Direction::BUY : engine::Direction::SELL;
+
+    if (order_item.state == "filled") {
+      order_data_item->status = engine::OrderStatus::FILLED;
+    } else if (order_item.state == "canceled") {
+      order_data_item->status = engine::OrderStatus::CANCELLED;
+    } else if (order_item.state == "partially_filled") {
+      order_data_item->status = engine::OrderStatus::PARTIAL_FILLED;
+    } else {
+      order_data_item->status = engine::OrderStatus::PENDING;
+    }
 
     item->items.push_back(order_data_item);
   }
@@ -414,6 +467,9 @@ SendOrderRequest Okx::to_send_order_request_swap(engine::OrderDataItemPtr order)
 
   req.tdMode = "cross";
 
+  // 合约才支持只减仓；现货留空，避免向不兼容该字段的接口传参。
+  if (order->reduce_only) req.reduceOnly = "true";
+
   req.px = order->price;
   req.sz = order->volume;
 
@@ -458,7 +514,9 @@ asio::awaitable<void> Okx::ws_private_subscribe_position() {
 asio::awaitable<void> Okx::ws_private_subscribe_order() {
   auto sub_req = WsSubscibeOrderRequest();
   sub_req.op = "subscribe";  // 订阅操作
-  sub_req.args = {{"orders", "SWAP"}};
+  // 私有订单频道按 instType 订阅，现货与合约都要订阅，
+  // 否则只覆盖单一品种时收不到另一品种的订单推送。
+  sub_req.args = {{"orders", "SPOT"}, {"orders", "SWAP"}};
 
   co_await ws_private_->write(sub_req);
 }

@@ -1,5 +1,5 @@
-#ifndef __STRATEGY_BASE_STRATEGY_H__
-#define __STRATEGY_BASE_STRATEGY_H__
+#ifndef QITRADER_STRATEGY_BASE_STRATEGY_H_
+#define QITRADER_STRATEGY_BASE_STRATEGY_H_
 
 /**
  * @file strategy.h
@@ -12,6 +12,11 @@
 
 #include "utils/utils.h"
 #include "engine.h"
+#include "core/runtime/strategy_context.h"
+
+namespace core::runtime {
+class StrategyRuntime;  ///< 前向声明，避免策略头文件依赖完整运行时实现
+}
 
 namespace strategy {
 namespace base {
@@ -71,11 +76,19 @@ public:
   asio::awaitable<void> on_subscribe_tick(const std::string& symbol);
 
   /**
-   * @brief 发送订单
-   * @param order 订单数据
-   * @return asio::awaitable<void> 异步协程
+   * @brief 注入通用策略运行时上下文
+   * @param context 策略运行时上下文
+   * @param runtime 可选通用运行时，便于停止前等待命令排空
    */
-  asio::awaitable<void> on_send_order(engine::OrderDataPtr order);
+  void set_runtime_context(std::shared_ptr<core::runtime::StrategyContext> context,
+                           std::shared_ptr<core::runtime::StrategyRuntime> runtime = {});
+
+  /**
+   * @brief 获取通用策略运行时上下文
+   */
+  std::shared_ptr<core::runtime::StrategyContext> runtime_context() const {
+    return m_runtime_context;
+  }
 
   /**
    * @brief 接收账户数据回调（纯虚函数，子类必须实现）
@@ -106,6 +119,13 @@ public:
   virtual asio::awaitable<void> recv_tick(engine::TickDataPtr ticker) = 0;
 
   /**
+   * @brief 接收 K 线数据回调
+   * @param bar K 线数据
+   * @return asio::awaitable<void> 异步协程
+   */
+  virtual asio::awaitable<void> recv_bar(engine::BarDataPtr bar) = 0;
+
+  /**
    * @brief 接收订单数据回调（纯虚函数，子类必须实现）
    * @param order 订单数据
    * @return asio::awaitable<void> 异步协程
@@ -113,7 +133,9 @@ public:
   virtual asio::awaitable<void> recv_order(engine::OrderDataPtr order) = 0;
 
 private:
-  engine::EnginePtr _engine;  ///< 引擎指针
+  std::weak_ptr<engine::Engine> m_engine;  ///< 引擎弱引用，避免循环引用
+  std::shared_ptr<core::runtime::StrategyContext> m_runtime_context;  ///< 可选通用运行时上下文
+  std::shared_ptr<core::runtime::StrategyRuntime> m_runtime;  ///< 可选通用策略运行时
 };
 
 }  // namespace base

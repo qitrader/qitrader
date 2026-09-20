@@ -1,5 +1,5 @@
-#ifndef __MARKET_BASE_GATEWAY_H__
-#define __MARKET_BASE_GATEWAY_H__
+#ifndef QITRADER_MARKET_BASE_GATEWAY_H_
+#define QITRADER_MARKET_BASE_GATEWAY_H_
 
 /**
  * @file gateway.h
@@ -47,12 +47,21 @@ public:
    * @brief 获取交易网关名称
    * @return std::string 网关名称
    */
-  std::string name() const { return _name; }
+  std::string name() const { return m_name; }
 
   // ========== 以下方法用于将数据发送到引擎 ==========
   
   /// 发送Tick数据到引擎
   asio::awaitable<void> on_tick(TickDataPtr tick);
+
+  /// 发送Tick数据并等待引擎处理完成
+  asio::awaitable<void> on_tick_sync(TickDataPtr tick);
+
+  /// 发送 K 线数据到引擎
+  asio::awaitable<void> on_bar(BarDataPtr bar);
+
+  /// 发送 K 线数据并等待引擎处理完成
+  asio::awaitable<void> on_bar_sync(BarDataPtr bar);
 
   /// 发送订单数据到引擎
   asio::awaitable<void> on_order(OrderDataPtr order);
@@ -126,10 +135,14 @@ public:
    * @return asio::awaitable<void> 异步协程
    */
   virtual asio::awaitable<void> market_init() = 0;
-  
+
+protected:
+  /// 请求引擎停止，用于回测等自主结束的网关
+  asio::awaitable<void> stop_engine();
+
 private:
-  const std::string _name;  ///< 网关名称
-  EnginePtr _engine;        ///< 引擎指针
+  const std::string m_name;        ///< 网关名称
+  std::weak_ptr<Engine> m_engine;  ///< 引擎弱引用，避免循环引用
 };
 
 }  // namespace market::base

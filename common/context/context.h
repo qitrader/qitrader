@@ -1,5 +1,5 @@
-#ifndef __COMMON_CONTEXT_CONTEXT_H__
-#define __COMMON_CONTEXT_CONTEXT_H__
+#ifndef QITRADER_COMMON_CONTEXT_CONTEXT_H_
+#define QITRADER_COMMON_CONTEXT_CONTEXT_H_
 
 /**
  * @file context.h
@@ -16,6 +16,7 @@
 #include <atomic>
 #include <functional>
 #include <set>
+#include <mutex>
 #include "utils/utils.h"
 
 namespace common::context {
@@ -30,6 +31,7 @@ public:
    * @param coroutine_name 协程名称
    */
   void add_running_coroutine(const std::string& coroutine_name) {
+    std::lock_guard<std::mutex> lock(mutex_);
     running_coroutines_.insert(coroutine_name);
   }
 
@@ -38,10 +40,30 @@ public:
    * @param coroutine_name 协程名称
    */
   void remove_running_coroutine(const std::string& coroutine_name) {
+    std::lock_guard<std::mutex> lock(mutex_);
     running_coroutines_.erase(coroutine_name);
+  }
+
+  /**
+   * @brief 获取运行中的协程数量
+   * @return size_t 协程数量
+   */
+  size_t size() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return running_coroutines_.size();
+  }
+
+  /**
+   * @brief 获取所有运行中的协程名称（用于调试）
+   * @return std::set<std::string> 协程名称集合
+   */
+  std::set<std::string> get_running_coroutines() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return running_coroutines_;
   }
   
 private:
+  mutable std::mutex mutex_;  ///< 保护running_coroutines_的互斥锁
   std::set<std::string> running_coroutines_;  ///< 运行中的协程名称集合
 };
 
@@ -170,4 +192,4 @@ void co_spawn_deteched(asio::any_io_executor& exec, ContextPtr ctx, std::functio
 
 }
 
-#endif
+#endif  // QITRADER_COMMON_CONTEXT_CONTEXT_H_

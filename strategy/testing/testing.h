@@ -1,6 +1,5 @@
-#ifndef __STRAGE_TESTING_TESTING_H__
-#define __STRAGE_TESTING_TESTING_H__
-
+#ifndef QITRADER_STRATEGY_TESTING_TESTING_H_
+#define QITRADER_STRATEGY_TESTING_TESTING_H_
 /**
  * @file testing.h
  * @brief 测试策略实现
@@ -12,7 +11,6 @@
  * - 打印接收到的数据
  */
 
-#include <string>
 #include "base/strategy.h"
 
 namespace strategy {
@@ -51,6 +49,9 @@ public:
   
   /// 接收并打印Tick数据
   asio::awaitable<void> recv_tick(engine::TickDataPtr ticker) override;
+
+  /// 接收并打印 K 线数据
+  asio::awaitable<void> recv_bar(engine::BarDataPtr bar) override;
 
   /// 接收并打印订单数据
   asio::awaitable<void> recv_order(engine::OrderDataPtr order) override;

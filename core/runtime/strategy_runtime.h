@@ -1,8 +1,11 @@
 #ifndef QITRADER_CORE_RUNTIME_STRATEGY_RUNTIME_H_
 #define QITRADER_CORE_RUNTIME_STRATEGY_RUNTIME_H_
 
+#include <atomic>
+#include <condition_variable>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <unordered_map>
 #include <utility>
 
@@ -12,10 +15,8 @@
 #include "core/market/market_data_feed.h"
 #include "core/portfolio/portfolio_ledger.h"
 #include "core/risk/risk_manager.h"
-#include <condition_variable>
-#include <mutex>
-
 #include "command_executor.h"
+#include "command_queue.h"
 #include "strategy_context.h"
 
 namespace core::runtime {
@@ -38,7 +39,20 @@ class StrategyRuntime : public std::enable_shared_from_this<StrategyRuntime> {
                   std::shared_ptr<CommandQueue> queue);
 
   /// 提交订单计划，经过风控和计划差异计算后进入异步队列。
-  asio::awaitable<domain::CommandResult> submit(const domain::OrderPlan& plan);
+  domain::CommandResult submit(const domain::OrderPlan& plan);
+
+  /// 行情快照已写入上下文后通知策略做决策。
+  void notifyMarket(const domain::MarketSnapshot& snapshot);
+
+  /// 设置策略行情回调。回调不得等待执行结果。
+  void setMarketHandler(std::function<void(const domain::MarketSnapshot&)> handler) {
+    m_market_handler = std::move(handler);
+  }
+
+  /// 设置策略执行回报回调。
+  void setExecutionHandler(std::function<void(const domain::ExecutionReport&)> handler) {
+    m_execution_handler = std::move(handler);
+  }
 
   /// 排空当前命令队列，通常与停止流程或按需调度配合使用。
   asio::awaitable<void> run();
@@ -67,7 +81,7 @@ class StrategyRuntime : public std::enable_shared_from_this<StrategyRuntime> {
   /**
    * @brief 接入行情数据源，使其快照直接进入策略上下文。
    *
-   * 接入后策略不再需要在 `recv_tick` 中自行更新行情快照。
+   * 接入后策略只通过 `onMarket` 读取上下文中的本帧快照。
    */
   void setMarketFeed(std::shared_ptr<market::MarketDataFeed> feed);
 
@@ -142,6 +156,8 @@ class StrategyRuntime : public std::enable_shared_from_this<StrategyRuntime> {
   execution::OrderManager m_orders;
   std::unique_ptr<CommandExecutor> m_executor;
   std::function<void(const domain::RuntimeDiagnostic&)> m_diagnostic_callback;
+  std::function<void(const domain::MarketSnapshot&)> m_market_handler;
+  std::function<void(const domain::ExecutionReport&)> m_execution_handler;
   std::function<bool()> m_active_checker;
   std::unordered_map<std::string, std::string> m_latest_plan_ids;
   std::shared_ptr<DrainTracker> m_drain;

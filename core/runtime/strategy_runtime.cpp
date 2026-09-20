@@ -23,8 +23,10 @@ StrategyRuntime::StrategyRuntime(
       m_drain(std::make_shared<DrainTracker>()) {
   m_context = std::make_shared<StrategyContext>(
       m_ledger, m_risk,
-      PlanSubmitter{},
       [this](const domain::OrderPlan& plan) { return submit(plan); },
+      [this](const domain::OrderPlan& plan) -> asio::awaitable<domain::CommandResult> {
+        co_return submit(plan);
+      },
       [this](const std::string& strategy_id) {
         return m_orders.activeOrders(strategy_id);
       });
@@ -45,28 +47,25 @@ StrategyRuntime::StrategyRuntime(
   }
 }
 
-asio::awaitable<domain::CommandResult> StrategyRuntime::submit(
-    const domain::OrderPlan& plan) {
+domain::CommandResult StrategyRuntime::submit(const domain::OrderPlan& plan) {
   if (m_closed.load()) {
-    co_return domain::CommandResult{
-        false, {domain::ErrorCode::QUEUE_FULL, "strategy runtime is closed"}, plan.plan_id};
+    return {false, {domain::ErrorCode::QUEUE_FULL, "strategy runtime is closed"}, plan.plan_id};
   }
   if (!m_queue || !m_risk || !m_ledger) {
     diagnostic(domain::DiagnosticSeverity::ERROR, domain::ErrorCode::INTERNAL_ERROR,
                plan.plan_id, {}, "strategy runtime is incomplete");
-    co_return domain::CommandResult{
-        false, {domain::ErrorCode::INTERNAL_ERROR, "strategy runtime is incomplete"},
-        plan.plan_id};
+    return {false, {domain::ErrorCode::INTERNAL_ERROR, "strategy runtime is incomplete"},
+            plan.plan_id};
   }
   const auto decision = m_risk->check(plan, *m_ledger->snapshot());
   if (!decision.accepted) {
     diagnostic(domain::DiagnosticSeverity::WARNING, decision.error.code,
                plan.plan_id, {}, decision.error.message);
-    co_return domain::CommandResult{false, decision.error, plan.plan_id};
+    return {false, decision.error, plan.plan_id};
   }
   const auto diff = m_orders.reconcile(decision.plan);
   m_latest_plan_ids[plan.strategy_id + "|" + plan.symbol] = plan.plan_id;
-  if (diff.operations.empty()) co_return domain::CommandResult{true, {}, plan.plan_id};
+  if (diff.operations.empty()) return {true, {}, plan.plan_id};
   RuntimeCommand command;
   command.command_id = plan.plan_id;
   command.diff = diff;
@@ -80,7 +79,11 @@ asio::awaitable<domain::CommandResult> StrategyRuntime::submit(
     if (m_drain->active > 0) --m_drain->active;
     m_drain->cv.notify_all();
   }
-  co_return result;
+  return result;
+}
+
+void StrategyRuntime::notifyMarket(const domain::MarketSnapshot& snapshot) {
+  if (m_market_handler) m_market_handler(snapshot);
 }
 
 bool StrategyRuntime::idle() const {
@@ -218,6 +221,7 @@ void StrategyRuntime::onExecution(const domain::ExecutionReport& report) {
     if (remaining > 0 && active->intent.type == domain::OrderType::LIMIT) {
       m_ledger->release(active->intent, remaining);
     }
+    if (m_execution_handler) m_execution_handler(report);
     return;
   }
   if (report.type != domain::ExecutionEventType::FILL &&
@@ -239,6 +243,7 @@ void StrategyRuntime::onExecution(const domain::ExecutionReport& report) {
   if (active->intent.type == domain::OrderType::LIMIT) {
     m_ledger->release(active->intent, delta);
   }
+  if (m_execution_handler) m_execution_handler(normalized);
 }
 
 void StrategyRuntime::setMarketFeed(std::shared_ptr<market::MarketDataFeed> feed) {

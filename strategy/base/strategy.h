@@ -3,142 +3,60 @@
 
 /**
  * @file strategy.h
- * @brief 交易策略基类定义
- * 
- * 提供了策略的基础框架，包括：
- * - 事件接收接口（行情、账户、持仓等）
- * - 事件发送接口（订阅、查询等）
+ * @brief 交易策略基类：只依赖领域快照与订单计划。
  */
 
-#include "utils/utils.h"
 #include "engine.h"
 #include "core/runtime/strategy_context.h"
 
 namespace core::runtime {
-class StrategyRuntime;  ///< 前向声明，避免策略头文件依赖完整运行时实现
+class StrategyRuntime;
 }
 
-namespace strategy {
-namespace base {
+namespace strategy::base {
 
 /**
- * @brief 策略基类
- * 
- * 所有交易策略必须继承此类并实现相应的事件处理方法。
- * 基类提供了与引擎交互的通用方法，如订阅行情、查询账户等。
+ * @brief 策略基类。
+ *
+ * 生命周期仍挂在 Engine 组件上；行情与成交全部通过领域类型进入策略。
  */
 class Strategy : public std::enable_shared_from_this<Strategy>, public engine::Component {
-public:
-  /**
-   * @brief 构造函数
-   * @param engine 引擎指针，用于与系统其他组件交互
-   */
-  Strategy(engine::EnginePtr engine);
-  ~Strategy();
+ public:
+  Strategy() = default;
+  ~Strategy() override = default;
 
-  /**
-   * @brief 初始化策略，注册事件回调函数
-   * @return asio::awaitable<void> 异步协程
-   */
   asio::awaitable<void> init() override;
 
   /**
-   * @brief 发送消息事件
-   * @param msg 消息数据
-   * @return asio::awaitable<void> 异步协程
-   */
-  asio::awaitable<void> on_message(engine::MessageDataPtr msg);
-  
-  /**
-   * @brief 请求查询账户信息
-   * @return asio::awaitable<void> 异步协程
-   */
-  asio::awaitable<void> on_request_account();
-  
-  /**
-   * @brief 请求查询持仓信息
-   * @return asio::awaitable<void> 异步协程
-   */
-  asio::awaitable<void> on_request_position();
-  
-  /**
-   * @brief 订阅订单簿数据
-   * @param symbol 交易对符号
-   * @return asio::awaitable<void> 异步协程
-   */
-  asio::awaitable<void> on_subscribe_book(const std::string& symbol);
-  
-  /**
-   * @brief 订阅Tick数据
-   * @param symbol 交易对符号
-   * @return asio::awaitable<void> 异步协程
-   */
-  asio::awaitable<void> on_subscribe_tick(const std::string& symbol);
-
-  /**
-   * @brief 注入通用策略运行时上下文
+   * @brief 注入通用策略运行时上下文。
    * @param context 策略运行时上下文
-   * @param runtime 可选通用运行时，便于停止前等待命令排空
+   * @param runtime 可选通用运行时，用于注册行情/成交回调并在停止前排空
    */
   void set_runtime_context(std::shared_ptr<core::runtime::StrategyContext> context,
                            std::shared_ptr<core::runtime::StrategyRuntime> runtime = {});
 
-  /**
-   * @brief 获取通用策略运行时上下文
-   */
+  /// 获取通用策略运行时上下文。
   std::shared_ptr<core::runtime::StrategyContext> runtime_context() const {
     return m_runtime_context;
   }
 
   /**
-   * @brief 接收账户数据回调（纯虚函数，子类必须实现）
-   * @param account 账户数据
-   * @return asio::awaitable<void> 异步协程
+   * @brief 本帧行情快照就绪后的决策入口。
+   *
+   * 回测中该回调发生在本帧撮合之后，不得等待执行结果。
    */
-  virtual asio::awaitable<void> recv_account(engine::AccountDataPtr account) = 0;
-  
-  /**
-   * @brief 接收持仓数据回调（纯虚函数，子类必须实现）
-   * @param position 持仓数据
-   * @return asio::awaitable<void> 异步协程
-   */
-  virtual asio::awaitable<void> recv_position(engine::PositionDataPtr position) = 0;
-  
-  /**
-   * @brief 接收订单簿数据回调（纯虚函数，子类必须实现）
-   * @param order 订单簿数据
-   * @return asio::awaitable<void> 异步协程
-   */
-  virtual asio::awaitable<void> recv_book(engine::BookPtr order) = 0;
-  
-  /**
-   * @brief 接收Tick数据回调（纯虚函数，子类必须实现）
-   * @param ticker Tick数据
-   * @return asio::awaitable<void> 异步协程
-   */
-  virtual asio::awaitable<void> recv_tick(engine::TickDataPtr ticker) = 0;
+  virtual void onMarket(const core::domain::MarketSnapshot& snapshot) { (void)snapshot; }
 
   /**
-   * @brief 接收 K 线数据回调
-   * @param bar K 线数据
-   * @return asio::awaitable<void> 异步协程
+   * @brief 标准化执行回报。默认忽略，策略可用它更新决策状态。
    */
-  virtual asio::awaitable<void> recv_bar(engine::BarDataPtr bar) = 0;
+  virtual void onExecution(const core::domain::ExecutionReport& report) { (void)report; }
 
-  /**
-   * @brief 接收订单数据回调（纯虚函数，子类必须实现）
-   * @param order 订单数据
-   * @return asio::awaitable<void> 异步协程
-   */
-  virtual asio::awaitable<void> recv_order(engine::OrderDataPtr order) = 0;
-
-private:
-  std::weak_ptr<engine::Engine> m_engine;  ///< 引擎弱引用，避免循环引用
-  std::shared_ptr<core::runtime::StrategyContext> m_runtime_context;  ///< 可选通用运行时上下文
-  std::shared_ptr<core::runtime::StrategyRuntime> m_runtime;  ///< 可选通用策略运行时
+ private:
+  std::shared_ptr<core::runtime::StrategyContext> m_runtime_context;
+  std::shared_ptr<core::runtime::StrategyRuntime> m_runtime;
 };
 
-}  // namespace base
-}  // namespace strategy
+}  // namespace strategy::base
 
-#endif  // __STRATEGY_BASE_STRATEGY_H__
+#endif  // QITRADER_STRATEGY_BASE_STRATEGY_H_

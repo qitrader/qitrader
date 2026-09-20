@@ -2,6 +2,7 @@
 #define QITRADER_STRATEGY_MULTILEVEL_MULTILEVEL_STRATEGY_H_
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -50,22 +51,18 @@ struct MultiLevelConfig {
  */
 class MultiLevelMarketMakingStrategy : public base::Strategy {
  public:
-  MultiLevelMarketMakingStrategy(engine::EnginePtr engine, MultiLevelConfig config);
+  explicit MultiLevelMarketMakingStrategy(MultiLevelConfig config);
   ~MultiLevelMarketMakingStrategy() override = default;
 
   asio::awaitable<void> run() override;
   /// 关闭时落盘模型，保证本次在线学习的成果不会随进程退出丢失
   asio::awaitable<void> shutdown() override;
-  asio::awaitable<void> recv_account(engine::AccountDataPtr account) override;
-  asio::awaitable<void> recv_position(engine::PositionDataPtr position) override;
-  asio::awaitable<void> recv_book(engine::BookPtr book) override;
-  asio::awaitable<void> recv_tick(engine::TickDataPtr ticker) override;
-  asio::awaitable<void> recv_bar(engine::BarDataPtr bar) override;
-  asio::awaitable<void> recv_order(engine::OrderDataPtr order) override;
+  void onMarket(const core::domain::MarketSnapshot& snapshot) override;
 
  private:
   std::vector<double> makeObservation() const;
-  engine::BookPtr makeSyntheticBook(const dec_float& price, int64_t timestamp_ms) const;
+  core::domain::MarketSnapshot makeSyntheticBook(const dec_float& price,
+                                                 int64_t timestamp_ms) const;
   double currentMidPrice() const;
   double tickSize() const;
   /// 从统一账本读取可用现金；策略不再维护本地资金状态。
@@ -80,12 +77,12 @@ class MultiLevelMarketMakingStrategy : public base::Strategy {
   /// 保存模型到配置路径
   bool saveModel() const;
   std::vector<int> allocateLots(const std::vector<double>& action) const;
-  asio::awaitable<void> reconfigureOrders(const std::vector<double>& observation);
+  void reconfigureOrders(const std::vector<double>& observation);
   std::string generateOrderId();
 
   MultiLevelConfig m_config;
   ActorCritic m_policy;
-  engine::BookPtr m_book;
+  std::optional<core::domain::MarketSnapshot> m_market;
   double m_last_price{0.0};
   double m_feature_mid{0.0};
   /// 上一次转移时的现金与库存，用于计算 Actor-Critic 奖励，不是账本权威值

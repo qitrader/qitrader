@@ -14,6 +14,9 @@ GatewayMarketDataAdapter::GatewayMarketDataAdapter(engine::EnginePtr engine)
   m_engine->register_callback<engine::Book>(
       engine::EventType::kBook,
       [this](engine::BookPtr book) { return onBook(std::move(book)); });
+  m_engine->register_callback<engine::BarData>(
+      engine::EventType::kBar,
+      [this](engine::BarDataPtr bar) { return onBar(std::move(bar)); });
 }
 
 domain::CommandResult GatewayMarketDataAdapter::subscribe(
@@ -35,7 +38,7 @@ void GatewayMarketDataAdapter::setCallback(MarketEventCallback callback) {
 }
 
 MarketFeedCapabilities GatewayMarketDataAdapter::capabilities() const {
-  return {.tick = true, .book = true, .bar = false, .historical = false};
+  return {.tick = true, .book = true, .bar = true, .historical = false};
 }
 
 asio::awaitable<void> GatewayMarketDataAdapter::dispatchSubscription(
@@ -87,6 +90,21 @@ domain::MarketSnapshot GatewayMarketDataAdapter::fromTick(const engine::TickData
   snapshot.last_price = tick.last_price;
   snapshot.last_quantity = tick.last_volume;
   return snapshot;
+}
+
+domain::MarketSnapshot GatewayMarketDataAdapter::fromBar(const engine::BarData& bar) {
+  domain::MarketSnapshot snapshot;
+  snapshot.symbol = bar.symbol;
+  snapshot.exchange = bar.exchange;
+  snapshot.timestamp_ms = bar.timestamp_ms;
+  snapshot.last_price = bar.close_price;
+  snapshot.last_quantity = bar.volume;
+  return snapshot;
+}
+
+asio::awaitable<void> GatewayMarketDataAdapter::onBar(engine::BarDataPtr bar) {
+  if (!bar || !m_callback) co_return;
+  m_callback(fromBar(*bar));
 }
 
 void GatewayMarketDataAdapter::mergeBook(domain::MarketSnapshot& snapshot,

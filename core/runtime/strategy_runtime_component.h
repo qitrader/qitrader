@@ -9,9 +9,10 @@
 namespace core::runtime {
 
 /**
- * @brief 将通用策略运行时接入旧 Engine 组件生命周期。
+ * @brief 将通用策略运行时接入 Engine 组件生命周期，并在行情事件后唤醒策略。
  *
- * run() 负责启动命令执行器；shutdown() 在引擎停止前异步排空命令队列。
+ * 回测网关在撮合之后才同步投递行情事件，因此这里唤醒策略不会让本帧新单
+ * 立刻成交。快照本身由 `MarketDataFeed` 在更早的 sink 中写入。
  */
 class StrategyRuntimeComponent final
     : public engine::Component,
@@ -21,16 +22,18 @@ class StrategyRuntimeComponent final
                            std::shared_ptr<StrategyRuntime> runtime)
       : m_engine(std::move(engine)), m_runtime(std::move(runtime)) {}
 
-  /// 组件初始化，仅输出运行日志。
+  /// 注册行情唤醒回调。
   asio::awaitable<void> init() override;
 
   /// 启动命令执行循环。
   asio::awaitable<void> run() override;
 
-  /// 引擎停止前排空命令队列，避免停止阶段继续下单或撤单。
+  /// 引擎停止前排空命令队列。
   asio::awaitable<void> shutdown() override;
 
  private:
+  asio::awaitable<void> dispatchMarket();
+
   engine::EnginePtr m_engine;
   std::shared_ptr<StrategyRuntime> m_runtime;
 };

@@ -25,7 +25,9 @@ class GatewayMarketDataAdapter final : public MarketDataFeed,
   asio::awaitable<void> dispatchSubscription(domain::MarketSubscription subscription);
   asio::awaitable<void> onTick(engine::TickDataPtr tick);
   asio::awaitable<void> onBook(engine::BookPtr book);
+  asio::awaitable<void> onBar(engine::BarDataPtr bar);
   static domain::MarketSnapshot fromTick(const engine::TickData& tick);
+  static domain::MarketSnapshot fromBar(const engine::BarData& bar);
   static void mergeBook(domain::MarketSnapshot& snapshot, const engine::Book& book);
 
   engine::EnginePtr m_engine;

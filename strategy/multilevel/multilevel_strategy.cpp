@@ -23,10 +23,8 @@ dec_float toDecimal(double value) {
 
 }  // namespace
 
-MultiLevelMarketMakingStrategy::MultiLevelMarketMakingStrategy(
-    engine::EnginePtr engine, MultiLevelConfig config)
-    : base::Strategy(engine),
-      m_config(std::move(config)),
+MultiLevelMarketMakingStrategy::MultiLevelMarketMakingStrategy(MultiLevelConfig config)
+    : m_config(std::move(config)),
       m_policy(6 + 2 * static_cast<std::size_t>(std::max(1, m_config.levels)),
                3 + 2 * static_cast<std::size_t>(std::max(1, m_config.levels)),
                m_config.learning_rate, m_config.exploration) {
@@ -85,100 +83,38 @@ asio::awaitable<void> MultiLevelMarketMakingStrategy::run() {
       "[多层级做市] 启动: symbol={}, levels={}, budget={}, size={}, inventory_limit={}, interval={}ms",
       m_config.symbol, m_config.levels, m_config.order_budget, m_config.order_size,
       m_config.inventory_limit, m_config.decision_interval_ms);
-  co_await on_request_account();
-  co_await on_request_position();
-  co_await on_subscribe_book(m_config.symbol);
-  co_await on_subscribe_tick(m_config.symbol);
-}
-
-asio::awaitable<void> MultiLevelMarketMakingStrategy::recv_account(engine::AccountDataPtr account) {
-  if (!account) co_return;
-  // 资金状态以统一账本为准，Legacy 账户事件由 LegacyLedgerAdapter 单向同步。
-  if (m_previous_cash == 0.0) m_previous_cash = effectiveCash();
   co_return;
 }
 
-asio::awaitable<void> MultiLevelMarketMakingStrategy::recv_position(
-    engine::PositionDataPtr position) {
-  if (!position) co_return;
-  // 持仓状态以统一账本为准，Legacy 持仓事件由 LegacyLedgerAdapter 单向同步。
-  co_return;
-}
+void MultiLevelMarketMakingStrategy::onMarket(const core::domain::MarketSnapshot& snapshot) {
+  if (snapshot.symbol != m_config.symbol || snapshot.last_price <= 0) return;
 
-asio::awaitable<void> MultiLevelMarketMakingStrategy::recv_book(engine::BookPtr book) {
-  if (!book || book->symbol != m_config.symbol) co_return;
-  if (book->bids.empty() || book->asks.empty()) co_return;
-  m_book = book;
-  const double bid = toDouble(book->bids.front().price);
-  const double ask = toDouble(book->asks.front().price);
-  if (bid > 0.0 && ask >= bid) {
-    m_tick_size = std::max(ask - bid, bid * 0.0001);
-  }
-  co_return;
-}
-
-asio::awaitable<void> MultiLevelMarketMakingStrategy::recv_tick(engine::TickDataPtr ticker) {
-  if (!ticker || ticker->symbol != m_config.symbol || ticker->last_price <= 0) co_return;
-
-  m_last_price = toDouble(ticker->last_price);
-  if (ticker->order_book && !ticker->order_book->bids.empty() &&
-      !ticker->order_book->asks.empty()) {
-    m_book = ticker->order_book;
+  m_last_price = toDouble(snapshot.last_price);
+  if (!snapshot.bids.empty() && !snapshot.asks.empty()) {
+    m_market = snapshot;
   } else {
-    m_book = makeSyntheticBook(ticker->last_price, ticker->timestamp_ms);
+    m_market = makeSyntheticBook(snapshot.last_price, snapshot.timestamp_ms);
   }
-  if (m_book && !m_book->bids.empty() && !m_book->asks.empty()) {
-    const double bid = toDouble(m_book->bids.front().price);
-    const double ask = toDouble(m_book->asks.front().price);
+  if (m_market && !m_market->bids.empty() && !m_market->asks.empty()) {
+    const double bid = toDouble(m_market->bids.front().price);
+    const double ask = toDouble(m_market->asks.front().price);
     if (ask >= bid && bid > 0.0) m_tick_size = std::max(ask - bid, bid * 0.0001);
   }
-  // Runtime 模式下的市场快照由 MarketDataFeed 驱动，策略只读不写。
+  if (m_previous_cash == 0.0) m_previous_cash = effectiveCash();
 
-  // 必须用行情时间戳推进策略时钟，否则 m_last_decision_timestamp 只会自增，
-  // 决策间隔判断永远成立，策略会退化成每个 tick 都下单。
-  m_current_timestamp = ticker->timestamp_ms;
-
+  // 必须用行情时间戳推进策略时钟，否则决策间隔判断永远成立。
+  m_current_timestamp = snapshot.timestamp_ms;
   const bool first_decision = m_last_decision_timestamp == 0;
   const bool interval_elapsed = first_decision ||
       m_config.decision_interval_ms == 0 ||
       m_current_timestamp - m_last_decision_timestamp >= m_config.decision_interval_ms;
-  if (interval_elapsed) {
-    co_await reconfigureOrders(makeObservation());
-  }
-}
-
-asio::awaitable<void> MultiLevelMarketMakingStrategy::recv_bar(engine::BarDataPtr bar) {
-  if (!bar || bar->symbol != m_config.symbol || bar->close_price <= 0) co_return;
-  auto tick = std::make_shared<engine::TickData>();
-  tick->symbol = bar->symbol;
-  tick->exchange = bar->exchange;
-  tick->timestamp_ms = bar->timestamp_ms;
-  tick->last_price = bar->close_price;
-  co_await recv_tick(tick);
-}
-
-asio::awaitable<void> MultiLevelMarketMakingStrategy::recv_order(engine::OrderDataPtr order) {
-  if (!order) co_return;
-  // 成交已由运行时转为执行回报并记入统一账本，订单表由 OrderManager 维护，
-  // 策略不再自行记账，这里只保留成交日志便于排查。
-  for (const auto& item : order->items) {
-    if (!item || item->symbol != m_config.symbol) continue;
-    if (item->status != engine::OrderStatus::FILLED &&
-        item->status != engine::OrderStatus::PARTIAL_FILLED) {
-      continue;
-    }
-    // 成交明细只在 --v=1 输出；累计笔数见模拟交易摘要。
-    VLOG(1) << fmt::format("[多层级做市] 成交 #{}: {} {} @ {}", item->order_id,
-                           item->direction == engine::Direction::BUY ? "买入" : "卖出",
-                           item->filled_volume.str(), item->price.str());
-  }
-  co_return;
+  if (interval_elapsed) reconfigureOrders(makeObservation());
 }
 
 double MultiLevelMarketMakingStrategy::currentMidPrice() const {
-  if (m_book && !m_book->bids.empty() && !m_book->asks.empty()) {
-    const double bid = toDouble(m_book->bids.front().price);
-    const double ask = toDouble(m_book->asks.front().price);
+  if (m_market && !m_market->bids.empty() && !m_market->asks.empty()) {
+    const double bid = toDouble(m_market->bids.front().price);
+    const double ask = toDouble(m_market->asks.front().price);
     if (bid > 0.0 && ask >= bid) return (bid + ask) / 2.0;
   }
   return m_last_price;
@@ -225,27 +161,21 @@ double MultiLevelMarketMakingStrategy::availableInventory() const {
   return 0.0;
 }
 
-engine::BookPtr MultiLevelMarketMakingStrategy::makeSyntheticBook(
+core::domain::MarketSnapshot MultiLevelMarketMakingStrategy::makeSyntheticBook(
     const dec_float& price, int64_t timestamp_ms) const {
   const double mid = toDouble(price);
   const double step = std::max(0.01, mid * 0.0001);
-  auto book = std::make_shared<engine::Book>();
-  book->symbol = m_config.symbol;
-  book->exchange = "synthetic";
-  book->timestamp_ms = timestamp_ms;
+  core::domain::MarketSnapshot book;
+  book.symbol = m_config.symbol;
+  book.exchange = "synthetic";
+  book.timestamp_ms = timestamp_ms;
+  book.last_price = price;
   for (int level = 0; level < m_config.levels; ++level) {
-    engine::BookItem bid;
-    bid.symbol = m_config.symbol;
-    bid.price = toDecimal(mid - step * (level + 1));
-    bid.volume = dec_float("10");
-    book->bids.push_back(bid);
-
-    engine::BookItem ask;
-    ask.symbol = m_config.symbol;
-    ask.price = toDecimal(mid + step * (level + 1));
-    ask.volume = dec_float("10");
-    book->asks.push_back(ask);
+    book.bids.push_back({toDecimal(mid - step * (level + 1)), dec_float("10")});
+    book.asks.push_back({toDecimal(mid + step * (level + 1)), dec_float("10")});
   }
+  if (!book.bids.empty()) book.bid_price = book.bids.front().price;
+  if (!book.asks.empty()) book.ask_price = book.asks.front().price;
   return book;
 }
 
@@ -258,14 +188,14 @@ std::vector<double> MultiLevelMarketMakingStrategy::makeObservation() const {
   double spread = tickSize();
   double imbalance = 0.0;
 
-  if (m_book && !m_book->bids.empty() && !m_book->asks.empty()) {
-    const double bid = toDouble(m_book->bids.front().price);
-    const double ask = toDouble(m_book->asks.front().price);
+  if (m_market && !m_market->bids.empty() && !m_market->asks.empty()) {
+    const double bid = toDouble(m_market->bids.front().price);
+    const double ask = toDouble(m_market->asks.front().price);
     spread = std::max(0.0, ask - bid);
-    const std::size_t bid_count = std::min<std::size_t>(m_book->bids.size(), m_config.levels);
-    const std::size_t ask_count = std::min<std::size_t>(m_book->asks.size(), m_config.levels);
-    for (std::size_t i = 0; i < bid_count; ++i) bid_depth += toDouble(m_book->bids[i].volume);
-    for (std::size_t i = 0; i < ask_count; ++i) ask_depth += toDouble(m_book->asks[i].volume);
+    const std::size_t bid_count = std::min<std::size_t>(m_market->bids.size(), m_config.levels);
+    const std::size_t ask_count = std::min<std::size_t>(m_market->asks.size(), m_config.levels);
+    for (std::size_t i = 0; i < bid_count; ++i) bid_depth += toDouble(m_market->bids[i].quantity);
+    for (std::size_t i = 0; i < ask_count; ++i) ask_depth += toDouble(m_market->asks[i].quantity);
     const double total_depth = bid_depth + ask_depth;
     if (total_depth > 0.0) imbalance = (bid_depth - ask_depth) / total_depth;
   }
@@ -473,20 +403,20 @@ std::vector<int> MultiLevelMarketMakingStrategy::allocateLots(
   return lots;
 }
 
-asio::awaitable<void> MultiLevelMarketMakingStrategy::reconfigureOrders(
+void MultiLevelMarketMakingStrategy::reconfigureOrders(
     const std::vector<double>& observation) {
-  if (!m_book || m_book->bids.empty() || m_book->asks.empty()) co_return;
+  if (!m_market || m_market->bids.empty() || m_market->asks.empty()) return;
 
   const auto context = runtime_context();
   if (!context) {
     LOG(WARNING) << "[多层级做市] 未注入策略运行时上下文，无法提交订单计划";
-    co_return;
+    return;
   }
 
   updateTransition(observation);
   const auto action = m_policy.sample(observation);
   const auto lots = allocateLots(action);
-  if (lots.size() != static_cast<std::size_t>(3 + 2 * m_config.levels)) co_return;
+  if (lots.size() != static_cast<std::size_t>(3 + 2 * m_config.levels)) return;
 
   {
     core::domain::OrderPlan plan;
@@ -537,8 +467,8 @@ asio::awaitable<void> MultiLevelMarketMakingStrategy::reconfigureOrders(
     // 半价差下限取三者最大：盘口半价差、配置下限、半个最小变动价位。
     // 盘口价差常常只有 3 bps，而双边手续费 16 bps，贴着盘口报价等于每笔必亏；
     // 用费率量级的下限把报价推到能覆盖成本的位置（成交概率下降，但单笔有利可图）。
-    const double best_bid = toDouble(m_book->bids.front().price);
-    const double best_ask = toDouble(m_book->asks.front().price);
+    const double best_bid = toDouble(m_market->bids.front().price);
+    const double best_ask = toDouble(m_market->asks.front().price);
     const double book_half_spread = std::max(0.0, (best_ask - best_bid) / 2.0);
     const double half_spread = std::max(
         std::max(book_half_spread, mid * m_config.min_half_spread_bps / 10000.0),
@@ -546,13 +476,13 @@ asio::awaitable<void> MultiLevelMarketMakingStrategy::reconfigureOrders(
 
     // 档位步长：至少一跳；盘口档位间距更大时沿用盘口间距，保持与真实档位结构一致。
     double level_step = tickSize();
-    if (m_book->bids.size() > 1) {
-      level_step = std::max(level_step, std::abs(toDouble(m_book->bids[0].price) -
-                                                 toDouble(m_book->bids[1].price)));
+    if (m_market->bids.size() > 1) {
+      level_step = std::max(level_step, std::abs(toDouble(m_market->bids[0].price) -
+                                                 toDouble(m_market->bids[1].price)));
     }
-    if (m_book->asks.size() > 1) {
-      level_step = std::max(level_step, std::abs(toDouble(m_book->asks[0].price) -
-                                                 toDouble(m_book->asks[1].price)));
+    if (m_market->asks.size() > 1) {
+      level_step = std::max(level_step, std::abs(toDouble(m_market->asks[0].price) -
+                                                 toDouble(m_market->asks[1].price)));
     }
 
     for (int level = 0; level < m_config.levels; ++level) {
@@ -565,10 +495,10 @@ asio::awaitable<void> MultiLevelMarketMakingStrategy::reconfigureOrders(
                  lots[3 + m_config.levels + level] * m_config.order_size);
     }
 
-    const auto result = co_await context->submitAsync(plan);
+    const auto result = context->submit(plan);
     if (!result.accepted) {
       LOG(WARNING) << fmt::format("[多层级做市] 订单计划未提交: {}", result.error.message);
-      co_return;
+      return;
     }
     m_previous_action = action;
     m_last_decision_timestamp = m_current_timestamp > 0
@@ -577,7 +507,6 @@ asio::awaitable<void> MultiLevelMarketMakingStrategy::reconfigureOrders(
     VLOG(1) << fmt::format("[多层级做市] 计划完成: intents={}, active_orders={}, inventory={}",
                            plan.intents.size(), context->activeOrders().size(),
                            effectiveInventory());
-    co_return;
   }
 }
 

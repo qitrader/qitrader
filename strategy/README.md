@@ -1,6 +1,6 @@
 # 策略目录
 
-本目录存放交易策略实现。所有策略继承 `base::Strategy`，通过引擎事件回调接收行情，
+本目录存放交易策略实现。所有策略继承 `base::Strategy`，通过 `onMarket` 接收标准化行情快照，
 并通过统一运行时上下文（`StrategyContext`）读取账本快照、提交订单计划（`OrderPlan`）。
 
 ## 目录结构
@@ -17,6 +17,5 @@
 
 ## 新增策略
 
-继承 `base::Strategy` 并实现 `recv_account` / `recv_position` / `recv_book` /
-`recv_tick` / `recv_bar` / `recv_order` 六个回调，随后在 `main.cpp` 中按 `--strategy`
+继承 `base::Strategy` 并实现 `onMarket`（成交状态可实现 `onExecution`），随后在 `main.cpp` 中按 `--strategy`
 名称注册即可。策略不应自行维护资金与持仓状态，统一从运行时上下文读取账本快照。

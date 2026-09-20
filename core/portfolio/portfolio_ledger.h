@@ -41,37 +41,10 @@ class PortfolioLedger {
   void markToMarket(const std::string& symbol, const dec_float& price,
                     int64_t timestamp_ms);
 
-  /**
-   * @brief 从 Legacy Gateway 同步现金状态。
-   *
-   * 仅限 `LegacyLedgerAdapter` 在初始化阶段调用；策略不得直接写入账本。
-   */
-  void syncCash(const dec_float& cash, const dec_float& frozen_cash,
-                int64_t timestamp_ms = 0);
-
-  /// 同 `syncCash`，同步指定品种持仓；仅限 `LegacyLedgerAdapter` 调用。
-  void syncPosition(const domain::PositionSnapshot& position,
-                    int64_t timestamp_ms = 0);
-
-  /// 同 `syncCash`，整体同步持仓快照；仅限 `LegacyLedgerAdapter` 调用。
-  void syncPositions(const std::vector<domain::PositionSnapshot>& positions,
-                     int64_t timestamp_ms = 0);
-
-  /**
-   * @brief 账本是否已经被执行回报写入过。
-   *
-   * `LegacyLedgerAdapter` 用它判断能否采纳 Legacy 初始状态：
-   * 一旦账本自身开始记账，就不再接受外部覆盖，避免出现状态回退。
-   */
-  bool hasExecutionUpdates() const { return m_execution_applied; }
-
  private:
   domain::PositionSnapshot* findPosition(const std::string& symbol);
   const domain::PositionSnapshot* findPosition(const std::string& symbol) const;
-  void bumpVersion(int64_t timestamp_ms);
-
-  /// 是否已经有执行回报写入过账本，用于阻止 Legacy 状态覆盖自身记账
-  bool m_execution_applied{false};
+  void   bumpVersion(int64_t timestamp_ms);
 
   domain::PortfolioSnapshot m_snapshot;
   std::unordered_set<std::string> m_processed_executions;

@@ -1,7 +1,5 @@
 #include "portfolio_ledger.h"
 
-#include <algorithm>
-
 namespace core::portfolio {
 
 PortfolioLedger::PortfolioLedger(const dec_float& initial_cash) {
@@ -113,7 +111,6 @@ domain::CommandResult PortfolioLedger::apply(const domain::ExecutionReport& repo
     }
     m_snapshot.fees += report.fee;
     m_snapshot.cash -= report.fee;
-    m_execution_applied = true;
   }
 
   bumpVersion(report.timestamp_ms);
@@ -126,60 +123,6 @@ void PortfolioLedger::markToMarket(const std::string& symbol, const dec_float& p
   if (!position) return;
   position->unrealized_pnl = (price - position->average_price) * position->quantity;
   bumpVersion(timestamp_ms);
-}
-
-void PortfolioLedger::syncCash(const dec_float& cash, const dec_float& frozen_cash,
-                               int64_t timestamp_ms) {
-  if (cash < 0 || frozen_cash < 0 || frozen_cash > cash) return;
-  m_snapshot.cash = cash;
-  m_snapshot.frozen_cash = frozen_cash;
-  bumpVersion(timestamp_ms);
-}
-
-void PortfolioLedger::syncPosition(const domain::PositionSnapshot& position,
-                                   int64_t timestamp_ms) {
-  if (position.symbol.empty() || position.quantity < 0 ||
-      position.frozen_quantity < 0 || position.frozen_quantity > position.quantity) {
-    return;
-  }
-  auto* current = findPosition(position.symbol);
-  if (!current) {
-    m_snapshot.positions.push_back(position);
-  } else {
-    *current = position;
-  }
-  bumpVersion(timestamp_ms);
-}
-
-void PortfolioLedger::syncPositions(
-    const std::vector<domain::PositionSnapshot>& positions, int64_t timestamp_ms) {
-  bool changed = false;
-  for (const auto& position : positions) {
-    if (position.symbol.empty() || position.quantity < 0 ||
-        position.frozen_quantity < 0 || position.frozen_quantity > position.quantity) {
-      continue;
-    }
-    auto* current = findPosition(position.symbol);
-    if (!current) {
-      m_snapshot.positions.push_back(position);
-    } else {
-      *current = position;
-    }
-    changed = true;
-  }
-  // 批量同步表示一次完整快照，未出现在本次同步中的品种视为已平仓。
-  for (auto it = m_snapshot.positions.begin(); it != m_snapshot.positions.end();) {
-    const bool exists = std::any_of(
-        positions.begin(), positions.end(),
-        [&](const domain::PositionSnapshot& p) { return p.symbol == it->symbol; });
-    if (!exists) {
-      it = m_snapshot.positions.erase(it);
-      changed = true;
-    } else {
-      ++it;
-    }
-  }
-  if (changed) bumpVersion(timestamp_ms);
 }
 
 domain::PortfolioSnapshotPtr PortfolioLedger::snapshot() const {

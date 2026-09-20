@@ -5,7 +5,7 @@
 # 验证每个策略在不同执行端口下都能：
 #   1. 完整跑完回测并输出绩效报告；
 #   2. 以 0 退出码结束，不出现 ERROR / 崩溃 / 堆损坏；
-#   3. 两个账本最终一致，且行情数据源已接通。
+#   3. 行情数据源已接通，运行时上下文已注入。
 #
 # 用法：
 #   scripts/runtime_smoke_test.sh              # 直接跑已构建的二进制
@@ -69,7 +69,6 @@ run_case() {
   [[ $rc -ne 0 ]] && problems+=("退出码=$rc")
   grep -q "回测完成" "$log" || problems+=("未输出绩效报告")
   grep -qE "ERROR|terminate|corrupted|Aborted" "$log" && problems+=("日志含错误或崩溃")
-  grep -q "账本一致性" "$log" && problems+=("账本最终不一致")
   grep -q "未收到行情快照" "$log" && problems+=("行情数据源未接通")
   grep -q "未注入策略运行时上下文" "$log" && problems+=("运行时上下文未注入")
 

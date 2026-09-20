@@ -71,7 +71,7 @@ flowchart TB
 设计要点：
 
 - **策略不依赖具体交易所**：策略只依赖 `StrategyContext` 与领域类型，执行环境由 `ExecutionVenue` 屏蔽
-- **账本单点写入**：只有标准化执行回报和 `LegacyLedgerAdapter` 的单向同步能写入账本，策略侧只拿到只读快照
+- **账本单点写入**：只有标准化执行回报能写入账本，策略侧只拿到只读快照
 - **运行时端口先于策略注册**：行情适配器先注册引擎行情回调，保证策略读到的是本帧而非上一帧快照
 
 ### 职责边界
@@ -100,7 +100,7 @@ flowchart LR
 | 自身挂单视图 | `OrderManager::activeOrders` | 只读 |
 | 交易决策 | 策略自身 | 是，唯一职责 |
 
-需要保留引擎事件通道的原因是：网关执行端口本身架在 `kSendOrder`/`kCancelOrder` 事件之上，行情与成交回报也仍通过 `recv_tick`/`recv_order` 进入策略。运行时收口的是**职责**，不是事件层。
+需要保留引擎事件通道的原因是：网关执行端口本身架在 `kSendOrder`/`kCancelOrder` 事件之上。策略不再接收这些事件——运行时把行情转换成 `MarketSnapshot`，把成交转换成 `ExecutionReport`，策略只实现 `onMarket` / `onExecution`。
 
 ### Runtime 下单时序
 
@@ -155,7 +155,7 @@ qitrader/
 ├── core/                       # 通用运行时（与交易所、引擎细节无关）
 │   ├── domain/                 # 领域模型：市场、订单意图、执行回报、账本快照
 │   ├── runtime/                # 策略上下文、命令队列、命令执行器、运行期组件
-│   ├── portfolio/              # 统一账本与 Legacy 状态单向同步适配器
+│   ├── portfolio/              # 统一账本
 │   ├── risk/                   # 事前风控规则
 │   ├── execution/              # 订单管理、执行端口抽象及回测/网关实现
 │   ├── market/                 # 行情数据源抽象及 CSV / 网关实现
@@ -194,7 +194,6 @@ qitrader/
 | `core::risk::RiskManager` | 订单数量、名义价值、持仓上限、单边暴露等事前风控 |
 | `core::execution::OrderManager` | 活动订单表、订单 ID 分配、部分成交、撤单、替换与计划差异计算 |
 | `core::portfolio::PortfolioLedger` | 权威账本，按 `execution_id` 幂等处理执行回报并生成带版本号快照 |
-| `core::portfolio::LegacyLedgerAdapter` | 将 Legacy 网关的账户/持仓事件**单向**同步到统一账本，收尾时输出一致性差异 |
 | `core::market::MarketDataFeed` | 行情数据源抽象；CSV 回放与网关行情各自实现 |
 | `core::execution::ExecutionVenue` | 执行端口抽象；回测直连撮合器，实盘与 Paper 经网关适配器 |
 | `core::environment::TradingEnvironment` | `reset()/step()` 强化学习接口，奖励含手续费与滑点成本分解 |
@@ -362,7 +361,7 @@ key = your_wework_key
 
 ## 扩展开发
 
-**新增策略**：继承 `strategy::base::Strategy`，实现 `recv_tick`、`recv_book`、`recv_account`、`recv_position`、`recv_order`、`recv_bar`。决策逻辑通过 `runtime_context()` 读取行情与账本快照，并以 `OrderPlan` 提交目标订单集合；不要自行维护资金、持仓或订单表，也不要直接发送下单事件。
+**新增策略**：继承 `strategy::base::Strategy`，实现 `onMarket`（必要时实现 `onExecution`）。决策逻辑通过 `runtime_context()` 读取行情与账本快照，并以 `OrderPlan` 提交目标订单集合；不要自行维护资金、持仓或订单表，也不要直接发送下单事件。
 
 **新增交易所**：继承 `market::base::Gateway` 实现行情与交易接口。Runtime 路径下无需改动策略，只需确保 `GatewayExecutionVenueAdapter` 与 `GatewayMarketDataAdapter` 能完成类型转换。
 
@@ -382,7 +381,7 @@ key = your_wework_key
 | 构建失败 | 依赖未安装完整，确认 Boost、fmt、glog、OpenSSL、CryptoPP、liburing、jsoncpp 均在位 |
 | 实盘/Paper 启动即退出 | 缺少或格式错误的 `config.ini`，日志会打印具体原因 |
 | 提示"未收到行情快照" | 行情数据源未接通，检查 `--venue` 与数据文件 |
-| 出现"账本一致性"告警 | Legacy 网关账本与统一账本收尾时不一致，需核对成交是否都进入了执行回报 |
+| 出现账本与预期不符 | 执行回报未进入统一账本，核对成交是否都带 `execution_id` |
 
 日志基于 glog，默认输出到 stderr。
 

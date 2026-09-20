@@ -32,7 +32,6 @@
 #include "core/execution/gateway_execution_venue_adapter.h"
 #include "core/market/csv_market_data_feed.h"
 #include "core/market/gateway_market_data_adapter.h"
-#include "core/portfolio/legacy_ledger_adapter.h"
 #include "core/runtime/command_queue.h"
 #include "core/runtime/strategy_runtime.h"
 #include "core/runtime/strategy_runtime_component.h"
@@ -167,7 +166,7 @@ int main(int argc, char* argv[]) {
       }
 
       strategy = std::make_shared<strategy::grid::GridStrategy>(
-          engine, AppOptions->symbol(), grid_upper, grid_lower, grid_count, grid_amount);
+          AppOptions->symbol(), grid_upper, grid_lower, grid_count, grid_amount);
       LOG(INFO) << fmt::format("策略: 网格交易, 交易对: {}, 区间: [{}, {}], 网格数: {}, 每格: {}",
           AppOptions->symbol(), grid_lower_text, grid_upper_text, grid_count, grid_amount_text);
     } catch (const std::exception& e) {
@@ -198,14 +197,14 @@ int main(int argc, char* argv[]) {
         return 1;
       }
       strategy = std::make_shared<strategy::multilevel::MultiLevelMarketMakingStrategy>(
-          engine, std::move(config));
+          std::move(config));
       LOG(INFO) << "策略: Multi-Level Market Making with Actor-Critic";
     } catch (const std::exception& e) {
       LOG(ERROR) << fmt::format("多层级做市参数格式错误: {}", e.what());
       return 1;
     }
   } else if (strategy_name == "testing") {
-    strategy = std::make_shared<strategy::testing::Testing>(engine);
+    strategy = std::make_shared<strategy::testing::Testing>();
     LOG(INFO) << "策略: Testing";
   } else {
     LOG(ERROR) << "未知策略: " << strategy_name << "，可选值为 testing、grid 或 multilevel";
@@ -214,10 +213,9 @@ int main(int argc, char* argv[]) {
 
   std::shared_ptr<core::runtime::StrategyRuntime> runtime;
   std::shared_ptr<core::runtime::StrategyRuntimeComponent> runtime_component;
-  std::shared_ptr<core::portfolio::LegacyLedgerAdapter> ledger_adapter;
   {
-    auto legacy_strategy = std::dynamic_pointer_cast<strategy::base::Strategy>(strategy);
-    if (!legacy_strategy) {
+    auto trading_strategy = std::dynamic_pointer_cast<strategy::base::Strategy>(strategy);
+    if (!trading_strategy) {
       LOG(ERROR) << "当前策略不支持通用策略运行时";
       return 1;
     }
@@ -254,27 +252,15 @@ int main(int argc, char* argv[]) {
     // 行情数据源接入后，策略上下文的快照由数据源驱动，策略无需自行更新行情。
     if (runtime_feed) {
       runtime->setMarketFeed(runtime_feed);
-      if (csv_feed) {
-        // CSV 数据源需要显式订阅品种以过滤回放数据；
-        // 真实网关注销由策略的订阅事件完成，这里不再重复订阅。
-        core::domain::MarketSubscription subscription;
-        subscription.symbol = AppOptions->symbol();
-        subscription.tick = true;
-        subscription.book = true;
-        subscription.bar = true;
-        runtime->subscribeMarket(subscription);
-      }
+      core::domain::MarketSubscription subscription;
+      subscription.symbol = AppOptions->symbol();
+      subscription.tick = true;
+      subscription.book = true;
+      subscription.bar = true;
+      runtime->subscribeMarket(subscription);
     }
 
-    // Legacy 网关的账户和持仓事件由适配器单向同步到统一账本，
-    // 策略不再直接写账本；差异显著时输出一致性告警。
-    ledger_adapter = std::make_shared<core::portfolio::LegacyLedgerAdapter>(
-        engine, ledger, [](const std::string& message) {
-          LOG(WARNING) << "[账本一致性] " << message;
-        });
-
-
-    legacy_strategy->set_runtime_context(runtime->context(), runtime);
+    trading_strategy->set_runtime_context(runtime->context(), runtime);
     runtime_component = std::make_shared<core::runtime::StrategyRuntimeComponent>(
         engine, runtime);
     LOG(INFO) << fmt::format("通用策略运行时: 执行端口: {}, 行情源: {}",
@@ -401,13 +387,6 @@ int main(int argc, char* argv[]) {
 
   // 运行IO事件循环，阻塞直到所有异步操作完成
   io_context.run();
-
-  // 收尾时两个账本都稳定，此时比较才能反映真实的账本分歧
-  if (ledger_adapter) {
-    ledger_adapter->verifyFinal();
-    LOG(INFO) << fmt::format("[账本一致性] 运行期间按 Legacy 账本校正 {} 次",
-                             ledger_adapter->reconcileCount());
-  }
 
   // 输出通用运行时的最终状态，确认行情与账本链路是否真正接通
   if (runtime) {

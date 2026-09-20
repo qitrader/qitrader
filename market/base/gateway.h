@@ -54,6 +54,15 @@ public:
   /// 发送Tick数据到引擎
   asio::awaitable<void> on_tick(TickDataPtr tick);
 
+  /// 发送Tick数据并等待引擎处理完成
+  asio::awaitable<void> on_tick_sync(TickDataPtr tick);
+
+  /// 发送 K 线数据到引擎
+  asio::awaitable<void> on_bar(BarDataPtr bar);
+
+  /// 发送 K 线数据并等待引擎处理完成
+  asio::awaitable<void> on_bar_sync(BarDataPtr bar);
+
   /// 发送订单数据到引擎
   asio::awaitable<void> on_order(OrderDataPtr order);
 
@@ -126,7 +135,11 @@ public:
    * @return asio::awaitable<void> 异步协程
    */
   virtual asio::awaitable<void> market_init() = 0;
-  
+
+protected:
+  /// 请求引擎停止，用于回测等自主结束的网关
+  asio::awaitable<void> stop_engine();
+
 private:
   const std::string m_name;        ///< 网关名称
   std::weak_ptr<Engine> m_engine;  ///< 引擎弱引用，避免循环引用

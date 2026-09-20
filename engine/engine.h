@@ -76,6 +76,18 @@ public:
   bool is_running() const { return m_running.load(); }
 
   /**
+   * @brief 检查引擎是否正在停止或已停止。
+   *
+   * 异步适配器和运行时应使用该状态，避免在停止阶段继续投递或执行事件。
+   */
+  bool is_stopping() const { return m_stopping.load(); }
+
+  /**
+   * @brief 获取事件引擎执行器，供异步适配器投递命令
+   */
+  asio::any_io_executor executor() { return m_channel.get_executor(); }
+
+  /**
    * @brief 引擎主运行循环
    * 
    * 执行流程：
@@ -94,6 +106,14 @@ public:
    * @return asio::awaitable<void> 异步协程
    */
   asio::awaitable<void> on_event(EventType etype, std::shared_ptr<const BaseData> event);
+
+  /**
+   * @brief 发送事件并等待所有回调处理完成
+   * @param etype 事件类型
+   * @param event 事件数据
+   * @return asio::awaitable<void> 所有回调完成后的异步协程
+   */
+  asio::awaitable<void> on_event_sync(EventType etype, std::shared_ptr<const BaseData> event);
 
   /**
    * @brief 注册事件回调函数
@@ -133,6 +153,12 @@ private:
 
   /// 引擎运行状态标志
   std::atomic<bool> m_running;
+
+  /// 引擎停止阶段标志，停止请求发出后为 true
+  std::atomic<bool> m_stopping{false};
+
+  /// 停止请求标志，保证 stop() 幂等
+  std::atomic<bool> m_stop_requested;
 };
 
 typedef std::shared_ptr<Engine> EnginePtr;

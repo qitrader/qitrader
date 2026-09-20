@@ -1,12 +1,23 @@
 #include "strategy.h"
 #include <glog/logging.h>
 
+#include <utility>
+
+#include "core/runtime/strategy_runtime.h"
+
 namespace strategy::base {
 
 Strategy::Strategy(engine::EnginePtr engine) : m_engine(engine) {
 }
 
 Strategy::~Strategy() {}
+
+void Strategy::set_runtime_context(
+    std::shared_ptr<core::runtime::StrategyContext> context,
+    std::shared_ptr<core::runtime::StrategyRuntime> runtime) {
+  m_runtime_context = std::move(context);
+  m_runtime = std::move(runtime);
+}
 
 // 初始化策略，注册各类事件的回调函数
 asio::awaitable<void> Strategy::init() {
@@ -31,7 +42,11 @@ asio::awaitable<void> Strategy::init() {
   // 注册Tick数据事件回调
   engine->register_callback<engine::TickData>(engine::EventType::kTick,
     std::bind(&Strategy::recv_tick, shared_from_this(), std::placeholders::_1));
-  
+
+  // 注册 K 线数据事件回调
+  engine->register_callback<engine::BarData>(engine::EventType::kBar,
+    std::bind(&Strategy::recv_bar, shared_from_this(), std::placeholders::_1));
+
   // 注册订单数据事件回调
   engine->register_callback<engine::OrderData>(engine::EventType::kOrder,
     std::bind(&Strategy::recv_order, shared_from_this(), std::placeholders::_1));
@@ -89,17 +104,5 @@ asio::awaitable<void> Strategy::on_subscribe_tick(const std::string& symbol) {
   tick->symbol = symbol;
   co_await engine->on_event(engine::EventType::kSubscribeTick, tick);
 }
-
-// 发送订单
-asio::awaitable<void> Strategy::on_send_order(engine::OrderDataPtr order) {
-  auto engine = m_engine.lock();
-  if (!engine) {
-    LOG(WARNING) << "Engine has been destroyed, cannot send order";
-    co_return;
-  }
-  co_await engine->on_event(engine::EventType::kSendOrder, order);
-}
-
-
 
 }  // namespace strategy::base

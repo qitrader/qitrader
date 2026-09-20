@@ -1,12 +1,13 @@
 #include "engine.h"
 #include "glog/logging.h"
 #include <atomic>
+#include <boost/asio/redirect_error.hpp>
 
 namespace engine {
 
 // 初始化引擎，创建容量为1000的并发事件通道
-Engine::Engine(asio::io_context& ctx, size_t channel_size) 
-  : m_channel(ctx, channel_size), m_running(false) {}
+Engine::Engine(asio::io_context& ctx, size_t channel_size)
+  : m_channel(ctx, channel_size), m_running(false), m_stop_requested(false) {}
 
 Engine::~Engine() {
   // 确保引擎已停止
@@ -23,7 +24,26 @@ asio::awaitable<void> Engine::on_event(EventType etype, std::shared_ptr<const Ba
   co_await m_channel.async_send(boost::system::error_code(), std::make_shared<Event>(etype, event), asio::use_awaitable);
 }
 
+asio::awaitable<void> Engine::on_event_sync(EventType etype, std::shared_ptr<const BaseData> event) {
+  // 引擎停止阶段不再等待事件处理完成，避免同步发送方永久挂起在事件通道上。
+  if (m_stopping.load()) co_return;
+
+  auto executor = co_await asio::this_coro::executor;
+  // 容量为 1 的完成通道：事件循环可以先投递完成信号，
+  // 等待方随后接收时仍能立即取到，不会出现“先取消、后等待”的永久挂起。
+  auto completion = std::make_shared<CompletionChannel>(executor, 1);
+
+  auto sync_event = std::make_shared<Event>(etype, event);
+  sync_event->completion = completion;
+  co_await m_channel.async_send(boost::system::error_code(), sync_event, asio::use_awaitable);
+
+  boost::system::error_code ec;
+  co_await completion->async_receive(asio::redirect_error(asio::use_awaitable, ec));
+}
+
 asio::awaitable<void> Engine::run() {
+  m_stop_requested.store(false);
+  m_stopping.store(false);
   m_running.store(true);
   
   // 第一阶段：顺序初始化所有组件
@@ -67,9 +87,13 @@ asio::awaitable<void> Engine::run() {
         m_running.store(false);
         break;
       }
+
+      // 停止阶段不再分发业务事件，避免关闭流程中继续回调组件。
+      if (m_stopping.load()) continue;
       
-      // 获取该事件类型对应的所有回调函数，串行执行保证顺序
-      auto& callbacks = m_callbacks[event->type];
+      // 获取该事件类型对应的所有回调函数，串行执行保证顺序。
+      // 遍历前建立快照，避免回调期间注册新回调导致迭代器失效。
+      auto callbacks = m_callbacks[event->type];
       for (auto& callback : callbacks) {
         try {
           co_await callback(event);
@@ -83,7 +107,7 @@ asio::awaitable<void> Engine::run() {
       }
 
       // 处理注册了kAll类型的回调
-      auto& all_callbacks = m_callbacks[EventType::kAll];
+      auto all_callbacks = m_callbacks[EventType::kAll];
       for (auto& callback : all_callbacks) {
         try {
           co_await callback(event);
@@ -94,6 +118,11 @@ asio::awaitable<void> Engine::run() {
         } catch (...) {
           LOG(ERROR) << fmt::format("Type {} callback error: unknown error", int(event->type)); 
         }
+      }
+
+      // 通知同步事件发送方：该事件及其全部回调已经处理完成
+      if (event->completion) {
+        event->completion->try_send(boost::system::error_code());
       }
     } catch (const boost::system::system_error& e) {
       // Check if channel is closed or operation was cancelled
@@ -121,9 +150,15 @@ asio::awaitable<void> Engine::stop() {
   if (!m_running.load()) {
     co_return;
   }
-  
+
+  bool expected = false;
+  if (!m_stop_requested.compare_exchange_strong(expected, true)) {
+    co_return;
+  }
+
   LOG(INFO) << "Stopping engine...";
-  
+  m_stopping.store(true);
+
   // 先通知所有组件进行资源清理
   for (auto& component : m_components) {
     try {

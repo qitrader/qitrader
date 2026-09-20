@@ -11,7 +11,6 @@
  * - 打印接收到的数据
  */
 
-#include <string>
 #include "base/strategy.h"
 
 namespace strategy {
@@ -50,6 +49,9 @@ public:
   
   /// 接收并打印Tick数据
   asio::awaitable<void> recv_tick(engine::TickDataPtr ticker) override;
+
+  /// 接收并打印 K 线数据
+  asio::awaitable<void> recv_bar(engine::BarDataPtr bar) override;
 
   /// 接收并打印订单数据
   asio::awaitable<void> recv_order(engine::OrderDataPtr order) override;

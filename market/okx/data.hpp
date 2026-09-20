@@ -97,7 +97,8 @@ struct SendOrderRequest {
   std::string posSide;
   std::string ordType;
   std::string tgtCcy;
-  
+  std::string reduceOnly;   ///< 只减仓："true" 生效，留空表示不使用该约束
+
   dec_float sz;
   dec_float px;
 };

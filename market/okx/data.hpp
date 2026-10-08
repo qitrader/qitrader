@@ -68,6 +68,8 @@ struct PositionDetail {
   dec_float pos;
   dec_float avgPx;
   dec_float pnl;
+  /// 交易对（如 BTC-USDT-SWAP）。追加在末尾，避免影响既有字段的解析顺序。
+  std::string instId;
 };
 
 typedef Respone<std::vector<PositionDetail>> PositionRespone;

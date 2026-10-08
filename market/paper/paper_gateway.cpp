@@ -489,8 +489,23 @@ asio::awaitable<void> PaperGateway::send_orders(engine::OrderDataPtr order) {
   m_reserved_position_volume += reserve_position;
   m_match_engine.submitOrder(mutable_order, m_last_price);
   // submitOrder 内部若立即撮合成交，同样会走 onTradeEvent 记入待回报列表；
-  // 紧接着下面就会用 on_order 回报整笔订单，先清空避免同一笔成交回报两次。
-  m_pending_fills.clear();
+  // 紧接着下面就会用 on_order 回报整笔订单，因此只移除本单相关的条目，
+  // 避免同一笔成交回报两次。整体清空会连本轮其他挂单的成交一起吞掉，
+  // 那些订单将永远停留在活跃挂单里，统一账本也收不到回报。
+  for (const auto& item : mutable_order->items) {
+    if (!item) continue;
+    const std::string& item_id = item->order_id;
+    m_pending_fills.erase(
+        std::remove_if(m_pending_fills.begin(), m_pending_fills.end(),
+                       [&item_id](const std::shared_ptr<engine::OrderData>& pending) {
+                         if (!pending) return true;
+                         for (const auto& pending_item : pending->items) {
+                           if (pending_item && pending_item->order_id == item_id) return true;
+                         }
+                         return false;
+                       }),
+        m_pending_fills.end());
+  }
   co_await on_order(order);
 }
 

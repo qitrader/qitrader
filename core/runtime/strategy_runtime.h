@@ -119,6 +119,11 @@ class StrategyRuntime : public std::enable_shared_from_this<StrategyRuntime> {
   /// 停止接受新的订单计划并关闭执行端口，用于引擎停止前收口。
   void close() {
     m_closed.store(true);
+    // 停止阶段立即解绑策略回调：回调持有策略的弱引用，
+    // 若留到运行时析构时才释放，其释放时机就取决于运行时与组件的析构顺序，
+    // 退出期容易与组件析构形成释放竞争。这里在引擎停止流程中主动断开。
+    m_market_handler = nullptr;
+    m_execution_handler = nullptr;
     if (auto* gateway = dynamic_cast<execution::GatewayExecutionVenueAdapter*>(m_venue.get())) {
       gateway->close();
     }
@@ -137,7 +142,22 @@ class StrategyRuntime : public std::enable_shared_from_this<StrategyRuntime> {
   void stop() { close(); if (m_queue) m_queue->close(); }
 
  private:
+  /// 安装命令队列的排空调度器；可重复调用，只生效一次。
+  void installDrainScheduler();
+
   asio::awaitable<void> execute(const RuntimeCommand& command);
+
+  /**
+   * @brief 等待首帧行情到达后再执行含市价单的命令。
+   *
+   * 策略可能在引擎启动、行情首帧到达之前就提交计划，此时执行端口没有可用价格，
+   * 市价单会被直接拒绝。这里做有界等待，避免启动期订单被静默丢弃。
+   */
+  asio::awaitable<void> waitForMarketPrice(const domain::OrderPlanDiff& diff);
+
+  /// 读取上下文中的最新价格，没有行情时返回 0。
+  dec_float marketPrice() const;
+
   void onExecution(const domain::ExecutionReport& report);
   void diagnostic(domain::DiagnosticSeverity severity, domain::ErrorCode code,
                   const std::string& plan_id, const std::string& order_id,
@@ -163,6 +183,7 @@ class StrategyRuntime : public std::enable_shared_from_this<StrategyRuntime> {
   std::shared_ptr<DrainTracker> m_drain;
   asio::any_io_executor m_engine_executor;
   std::atomic<bool> m_closed{false};
+  bool m_scheduler_installed{false};
 };
 
 }  // namespace core::runtime

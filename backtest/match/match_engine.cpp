@@ -71,7 +71,9 @@ std::shared_ptr<engine::OrderData> MatchEngine::cancelOrder(const std::string& o
     for (const auto& item : order->items) {
       if (!item || item->order_id != order_id) continue;
       auto mutable_item = std::const_pointer_cast<engine::OrderDataItem>(item);
-      if (mutable_item->status != engine::OrderStatus::PENDING) return nullptr;
+      // 已成交/已撤销的子单跳过本单即可，不能整体放弃：
+      // 返回 nullptr 会让调用方 continue，同批后面的可撤订单也被连累。
+      if (mutable_item->status != engine::OrderStatus::PENDING) break;
       mutable_item->status = engine::OrderStatus::CANCELLED;
       // 先持有副本再 erase：erase 会销毁容器内元素，
       // 之后再访问 `*it` 的引用就是未定义行为（会导致堆损坏）。
@@ -104,46 +106,63 @@ bool MatchEngine::tryMatch(std::shared_ptr<engine::OrderData>& order, const dec_
                            int64_t timestamp_ms, const std::string& symbol) {
   if (!order || order->items.empty()) return false;
 
-  auto& item = order->items[0];
+  // 逐个子单撮合：只处理 items[0] 会让多子单订单的其余子单被静默忽略。
+  bool filled_any = false;
+  for (const auto& item : order->items) {
+    if (!item) continue;
+    if (tryMatchItem(order, item, price, timestamp_ms, symbol)) filled_any = true;
+  }
+  return filled_any;
+}
+
+bool MatchEngine::tryMatchItem(std::shared_ptr<engine::OrderData>& order,
+                               const std::shared_ptr<const engine::OrderDataItem>& item,
+                               const dec_float& price, int64_t timestamp_ms,
+                               const std::string& symbol) {
   auto mutable_item = std::const_pointer_cast<engine::OrderDataItem>(item);
-
-  bool should_fill = false;
-
-  if (mutable_item->direction == engine::Direction::BUY) {
-    // 限价买单：价格 <= 限价时成交
-    should_fill = (price <= mutable_item->price);
-  } else {
-    // 限价卖单：价格 >= 限价时成交
-    should_fill = (price >= mutable_item->price);
+  // 已终结的子单不重复撮合，避免同一笔成交被计入两次。
+  if (mutable_item->status == engine::OrderStatus::FILLED ||
+      mutable_item->status == engine::OrderStatus::CANCELLED ||
+      mutable_item->status == engine::OrderStatus::REJECTED) {
+    return false;
   }
 
-  if (should_fill) {
-    mutable_item->filled_volume = mutable_item->volume;
-    mutable_item->status = engine::OrderStatus::FILLED;
+  const bool should_fill = mutable_item->direction == engine::Direction::BUY
+      // 限价买单：价格 <= 限价时成交
+      ? (price <= mutable_item->price)
+      // 限价卖单：价格 >= 限价时成交
+      : (price >= mutable_item->price);
+  if (!should_fill) return false;
 
-    auto trade = std::make_shared<engine::TradeData>();
-    trade->trade_id = generateId();
-    trade->symbol = order->symbol.empty() ? mutable_item->symbol : order->symbol;
-    trade->exchange = "backtest";
-    trade->timestamp_ms = timestamp_ms;
-    trade->direction = mutable_item->direction;
-    trade->price = mutable_item->price;
-    trade->volume = mutable_item->volume;
-    trade->order = order;
-    m_trades.push_back(trade);
+  mutable_item->filled_volume = mutable_item->volume;
+  mutable_item->status = engine::OrderStatus::FILLED;
 
-    VLOG(1) << fmt::format("[回测撮合] 限价单成交: {} {} {} @ {}",
-                           mutable_item->order_id,
-                             mutable_item->direction == engine::Direction::BUY ? "买入" : "卖出",
-                             mutable_item->volume.str(), mutable_item->price.str());
+  auto trade = std::make_shared<engine::TradeData>();
+  trade->trade_id = generateId();
+  trade->symbol = symbol.empty() ? (order->symbol.empty() ? mutable_item->symbol : order->symbol)
+                                 : symbol;
+  trade->exchange = "backtest";
+  trade->timestamp_ms = timestamp_ms;
+  trade->direction = mutable_item->direction;
+  trade->price = mutable_item->price;
+  trade->volume = mutable_item->volume;
+  trade->order = order;
+  m_trades.push_back(trade);
 
-    if (m_on_trade) {
-      m_on_trade(order, trade);
-    }
-    return true;
+  VLOG(1) << fmt::format("[回测撮合] 限价单成交: {} {} {} @ {}",
+                         mutable_item->order_id,
+                           mutable_item->direction == engine::Direction::BUY ? "买入" : "卖出",
+                           mutable_item->volume.str(), mutable_item->price.str());
+
+  if (m_on_trade) {
+    m_on_trade(order, trade);
   }
+  return true;
+}
 
-  return false;
+void MatchEngine::trimTradesBefore(std::size_t cursor) {
+  if (cursor == 0 || cursor > m_trades.size()) return;
+  m_trades.erase(m_trades.begin(), m_trades.begin() + static_cast<std::ptrdiff_t>(cursor));
 }
 
 std::string MatchEngine::generateId() {

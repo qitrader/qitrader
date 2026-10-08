@@ -22,6 +22,9 @@ class StrategyRuntimeComponent final
                            std::shared_ptr<StrategyRuntime> runtime)
       : m_engine(std::move(engine)), m_runtime(std::move(runtime)) {}
 
+  /// 返回当前有效的引擎，引擎已释放时为空。
+  std::shared_ptr<engine::Engine> engine() const { return m_engine.lock(); }
+
   /// 注册行情唤醒回调。
   asio::awaitable<void> init() override;
 
@@ -34,7 +37,9 @@ class StrategyRuntimeComponent final
  private:
   asio::awaitable<void> dispatchMarket();
 
-  engine::EnginePtr m_engine;
+  /// 引擎由 main 持有，这里只保存弱引用：
+  /// 组件被引擎强持有，再强引用引擎会形成环，导致双方都无法析构。
+  std::weak_ptr<engine::Engine> m_engine;
   std::shared_ptr<StrategyRuntime> m_runtime;
 };
 

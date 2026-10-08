@@ -34,7 +34,7 @@ public:
         ("help,h", "Show help message")
         ("config,c", po::value<std::string>()->default_value("config.ini"), "Path to config file")
         ("log,l", po::value<std::string>(), "Path to log file")
-        ("coin,k", po::value<std::string>()->default_value("TRUMP"), "Coin name")
+        ("v", po::value<int>()->default_value(0), "Verbose log level (glog VLOG)")
         ("backtest", "Enable backtest mode")
         ("paper", "Enable paper trading mode (live market data + virtual trading)")
         ("venue", po::value<std::string>()->default_value("auto"),
@@ -68,7 +68,11 @@ public:
         ("mm-exploration", po::value<double>()->default_value(0.05), "Market making exploration strength")
         ("mm-min-half-spread-bps", po::value<double>()->default_value(0.0), "Minimum half spread in bps so a round trip covers fees")
         ("mm-allow-market-orders", po::value<int>()->default_value(0), "Allow taker market orders, 1 enables (usually unprofitable)")
-        ("mm-inventory-skew-bps", po::value<double>()->default_value(0.0), "Inventory skew strength in bps applied to reservation price");
+        ("mm-inventory-skew-bps", po::value<double>()->default_value(0.0), "Inventory skew strength in bps applied to reservation price")
+        ("max-order-quantity", po::value<std::string>()->default_value("0"), "Pre-trade risk: max quantity per order, 0 disables")
+        ("max-order-notional", po::value<std::string>()->default_value(""), "Pre-trade risk: max notional per order, empty means initial capital, 0 disables")
+        ("max-position-quantity", po::value<std::string>()->default_value("0"), "Pre-trade risk: max net position quantity, 0 disables")
+        ("max-net-exposure", po::value<std::string>()->default_value("0"), "Pre-trade risk: max net exposure in quote currency, 0 disables");
   }
 
   std::string config_file() {
@@ -85,8 +89,17 @@ public:
     os << m_desc << std::endl;
   }
 
-  std::string coin() {
-    return m_vm["coin"].as<std::string>();
+  /// glog 的 VLOG 级别（--v=N）
+  int verbose() const {
+    return m_vm["v"].as<int>();
+  }
+
+  /// 日志文件路径，为空表示输出到 stderr
+  std::string log_file() const {
+    if (m_vm.count("log")) {
+      return m_vm["log"].as<std::string>();
+    }
+    return "";
   }
 
   /// 是否为回测模式
@@ -219,6 +232,13 @@ public:
   double mm_min_half_spread_bps() const { return m_vm["mm-min-half-spread-bps"].as<double>(); }
   int mm_allow_market_orders() const { return m_vm["mm-allow-market-orders"].as<int>(); }
   double mm_inventory_skew_bps() const { return m_vm["mm-inventory-skew-bps"].as<double>(); }
+
+  std::string max_order_quantity() const { return m_vm["max-order-quantity"].as<std::string>(); }
+  std::string max_order_notional() const { return m_vm["max-order-notional"].as<std::string>(); }
+  std::string max_position_quantity() const {
+    return m_vm["max-position-quantity"].as<std::string>();
+  }
+  std::string max_net_exposure() const { return m_vm["max-net-exposure"].as<std::string>(); }
 
 private:
   po::options_description m_desc;

@@ -64,10 +64,22 @@ class MatchEngine {
    */
   const std::vector<std::shared_ptr<engine::TradeData>>& trades() const { return m_trades; }
 
+  /**
+   * @brief 回收已被消费的成交记录，避免长周期回放下成交列表无限增长。
+   * @param cursor 调用方已处理到的下标
+   */
+  void trimTradesBefore(std::size_t cursor);
+
  private:
-  /// 尝试撮合一个挂单
+  /// 尝试撮合一个挂单（逐个子单处理，全部成交才算撮合完成）
   bool tryMatch(std::shared_ptr<engine::OrderData>& order, const dec_float& price,
                 int64_t timestamp_ms, const std::string& symbol);
+
+  /// 撮合单个子单，成交时生成成交记录
+  bool tryMatchItem(std::shared_ptr<engine::OrderData>& order,
+                    const std::shared_ptr<const engine::OrderDataItem>& item,
+                    const dec_float& price, int64_t timestamp_ms,
+                    const std::string& symbol);
 
   /// 生成唯一订单/成交 ID
   std::string generateId();

@@ -24,15 +24,20 @@ class PortfolioLedger {
 
   /**
    * @brief 设置指定订单冻结的资金或持仓。
+   *
+   * 市价单自身没有价格，必须按调用方传入的最新价估算名义价值；
+   * 没有参考价时退回意图价格，避免按零价格冻结。
    */
   domain::CommandResult reserve(const domain::OrderIntent& intent,
-                                const dec_float& quantity);
+                                const dec_float& quantity,
+                                const dec_float& market_price = dec_float(0));
 
   /**
-   * @brief 释放指定订单冻结的资金或持仓。
+   * @brief 释放指定订单冻结的资金或持仓，参考价口径与 reserve 保持一致。
    */
   domain::CommandResult release(const domain::OrderIntent& intent,
-                                const dec_float& quantity);
+                                const dec_float& quantity,
+                                const dec_float& market_price = dec_float(0));
 
   /// 返回当前不可变账本快照。
   domain::PortfolioSnapshotPtr snapshot() const;

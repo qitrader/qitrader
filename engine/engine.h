@@ -139,6 +139,12 @@ public:
    * @brief 注册组件到引擎
    * @param component 要注册的组件
    */
+  /**
+   * @brief 注册组件，所有权移交给引擎。
+   *
+   * 组件只由引擎持有一份强引用：调用方若同时保留一份，
+   * 两边会在退出时按不同顺序析构，与策略运行时的弱引用形成释放竞争。
+   */
   void register_component(std::shared_ptr<Component> component);
   
 private:
@@ -148,7 +154,9 @@ private:
   /// 事件类型到回调函数列表的映射
   std::map<EventType, std::vector<EventCallback>> m_callbacks;
   
-  /// 所有注册的组件列表
+  /// 所有注册的组件列表。
+  /// 注意：网关类组件自身持有引擎，引擎再强引用组件会形成环，
+  /// 退出时引擎与组件都无法释放（已知问题，需把网关改为弱引用才能根治）。
   std::vector<std::shared_ptr<Component>> m_components;
 
   /// 引擎运行状态标志

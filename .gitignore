@@ -4,8 +4,9 @@ CMakeUserPresets.json
 *.ini
 .xmake
 .cache/
-*.csv
-# 录制/回放用的行情数据体积很大（单份数百 MB），不入库。
-# 已被上面的 *.csv 覆盖，这里显式声明便于识别；注意同目录的 csv_loader 源码仍需入库。
+
+# 回测样例数据（小）需要入库：README 的快速开始示例直接依赖它。
+# 录制/回放用的历史行情体积很大（单份数百 MB），不入库。
 backtest/data/*.csv
-docs/
+recordings/*.csv
+logs/

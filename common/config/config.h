@@ -13,7 +13,8 @@
 namespace Config {
 
 using ptree = boost::property_tree::ptree;
-using dec_float = boost::multiprecision::cpp_dec_float_100;
+// 金额类型统一使用 utils.h 中的 dec_float（50 位），
+// 这里不再另定义一份 100 位同名别名，避免同一程序出现两种精度。
 
 class ConfigTree {
  public:

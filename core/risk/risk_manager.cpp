@@ -23,8 +23,11 @@ RiskDecision RiskManager::check(const domain::OrderPlan& plan,
     if (m_limits.max_order_quantity > 0 && intent.quantity > m_limits.max_order_quantity) {
       return {false, {domain::ErrorCode::RISK_REJECTED, "order quantity exceeds limit"}, {}};
     }
-    if (m_limits.max_order_notional > 0 && intent.type == domain::OrderType::LIMIT &&
-        intent.price * intent.quantity > m_limits.max_order_notional) {
+    // 市价单没有限价，必须按最新行情估算名义价值，否则这条限制对它完全失效。
+    const dec_float estimate = intent.type == domain::OrderType::MARKET && market
+        ? market->last_price : intent.price;
+    if (m_limits.max_order_notional > 0 &&
+        estimate * intent.quantity > m_limits.max_order_notional) {
       return {false, {domain::ErrorCode::RISK_REJECTED, "order notional exceeds limit"}, {}};
     }
   }

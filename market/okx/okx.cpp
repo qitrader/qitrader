@@ -63,7 +63,8 @@ asio::awaitable<void> Okx::deal_position(const std::vector<PositionDetail>& posi
   // 遍历所有持仓，转换为统一格式
   for (auto& pos_item : positions) {
     auto item = std::make_shared<engine::PositionItem>();
-    item->symbol = pos_item.ccy;   // 交易对
+    // 持仓的 symbol 语义是交易对，不是币种：用 instId，缺失时才退回 ccy。
+    item->symbol = pos_item.instId.empty() ? pos_item.ccy : pos_item.instId;
     item->volume = pos_item.pos;   // 持仓数量
     item->price = pos_item.avgPx;  // 均价
     item->pnl = pos_item.pnl;      // 盈亏

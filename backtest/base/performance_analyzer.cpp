@@ -30,9 +30,7 @@ void PerformanceAnalyzer::report(const dec_float& final_equity) const {
   auto max_drawdown = calcMaxDrawdown();
   auto sharpe = calcSharpeRatio();
 
-  dec_float win_rate, profit_factor;
-  int total_trades, winning_trades, losing_trades;
-  calcTradeStats(win_rate, profit_factor, total_trades, winning_trades, losing_trades);
+  const TradeStats stats = calcTradeStats();
 
   LOG(INFO) << "============================================";
   LOG(INFO) << "           回测绩效报告";
@@ -45,12 +43,14 @@ void PerformanceAnalyzer::report(const dec_float& final_equity) const {
                            dec_float(max_drawdown * 100).str(2, std::ios_base::fixed));
   LOG(INFO) << fmt::format("夏普比率:     {}", sharpe.str(4, std::ios_base::fixed));
   LOG(INFO) << "--------------------------------------------";
-  LOG(INFO) << fmt::format("总交易次数:   {}", total_trades);
-  LOG(INFO) << fmt::format("盈利次数:     {}", winning_trades);
-  LOG(INFO) << fmt::format("亏损次数:     {}", losing_trades);
+  LOG(INFO) << fmt::format("总成交笔数:   {}", stats.total_fills);
+  LOG(INFO) << fmt::format("平仓回合:     {}", stats.closed_rounds);
+  LOG(INFO) << fmt::format("盈利次数:     {}", stats.winning_trades);
+  LOG(INFO) << fmt::format("亏损次数:     {}", stats.losing_trades);
+  LOG(INFO) << fmt::format("未平仓笔数:   {}", stats.open_fills);
   LOG(INFO) << fmt::format("胜率:         {}%",
-                           dec_float(win_rate * 100).str(2, std::ios_base::fixed));
-  LOG(INFO) << fmt::format("盈亏比:       {}", profit_factor.str(4, std::ios_base::fixed));
+                           dec_float(stats.win_rate * 100).str(2, std::ios_base::fixed));
+  LOG(INFO) << fmt::format("盈亏比:       {}", stats.profit_factor.str(4, std::ios_base::fixed));
   LOG(INFO) << "============================================";
 }
 
@@ -131,12 +131,10 @@ dec_float PerformanceAnalyzer::calcSharpeRatio() const {
   return (mean / stddev) * boost::multiprecision::sqrt(periods_per_year);
 }
 
-void PerformanceAnalyzer::calcTradeStats(dec_float& win_rate, dec_float& profit_factor,
-                                         int& total_trades, int& winning_trades,
-                                         int& losing_trades) const {
-  total_trades = 0;
-  winning_trades = 0;
-  losing_trades = 0;
+TradeStats PerformanceAnalyzer::calcTradeStats() const {
+  TradeStats stats;
+  stats.total_fills = static_cast<int>(m_trades.size());
+  int total_trades = 0;
   dec_float total_profit(0);
   dec_float total_loss(0);
 
@@ -161,10 +159,10 @@ void PerformanceAnalyzer::calcTradeStats(dec_float& win_rate, dec_float& profit_
 
       ++total_trades;
       if (pnl > 0) {
-        ++winning_trades;
+        ++stats.winning_trades;
         total_profit += pnl;
       } else if (pnl < 0) {
-        ++losing_trades;
+        ++stats.losing_trades;
         total_loss += boost::multiprecision::abs(pnl);
       }
 
@@ -174,8 +172,17 @@ void PerformanceAnalyzer::calcTradeStats(dec_float& win_rate, dec_float& profit_
     }
   }
 
-  win_rate = total_trades > 0 ? dec_float(winning_trades) / dec_float(total_trades) : dec_float(0);
-  profit_factor = total_loss > 0 ? total_profit / total_loss : dec_float(0);
+  stats.closed_rounds = total_trades;
+  // 未平仓的买入不计入回合，单独列出，避免"只买未卖"的回测被统计成 0 笔交易。
+  for (const auto& [symbol, positions] : open_positions) {
+    for (const auto& open : positions) {
+      if (open.volume > 0) ++stats.open_fills;
+    }
+  }
+  stats.win_rate = total_trades > 0 ? dec_float(stats.winning_trades) / dec_float(total_trades)
+                                    : dec_float(0);
+  stats.profit_factor = total_loss > 0 ? total_profit / total_loss : dec_float(0);
+  return stats;
 }
 
 }  // namespace backtest::base

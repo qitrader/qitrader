@@ -218,6 +218,8 @@ xmake build qitrader-core-tests
 
 二进制输出在 `build/linux/x86_64/debug/qitrader`（发布模式为 `release`）。
 
+依赖说明：`xmake.lua` 锁定 Boost `1.89.0` 并使用 b2 构建。原因是 `httpcpp` 的预编译静态库依赖 Boost 1.89 的 ABI；且该版本的 cmake 构建脚本在较新的 cmake 上会失败，因此需要回退到 b2。升级 Boost 前请先确认 `httpcpp` 仍能正常链接。
+
 ### 回测
 
 ```bash
@@ -225,14 +227,16 @@ xmake build qitrader-core-tests
 ./build/linux/x86_64/debug/qitrader --backtest \
     --strategy grid --symbol BTC-USDT \
     --data-file data/sample_btc_usdt.csv \
-    --grid-upper 97500 --grid-lower 96800 --grid-count 5 --grid-amount 0.01
+    --grid-upper 97800 --grid-lower 96800 --grid-count 5 --grid-amount 0.01
 
 # 多层级做市（走统一账本、风控与订单管理）
 ./build/linux/x86_64/debug/qitrader --backtest \
     --strategy multilevel --symbol BTC-USDT \
     --data-file data/sample_btc_usdt.csv \
-    --mm-levels 3 --mm-order-size 1 --mm-decision-interval-ms 30000
+    --mm-levels 3 --mm-order-size 0.01 --mm-decision-interval-ms 30000
 ```
+
+网格区间必须覆盖样例数据的价格范围（约 97250–97750），否则策略会一直打印"当前价格超出网格范围"且不产生成交；同理 `--mm-order-size` 要与初始资金匹配，每手 1 BTC 约需 9.7 万名义价值。
 
 回测数据为 CSV，表头为：
 
@@ -246,7 +250,9 @@ timestamp_ms,symbol,last_price,volume,open,high,low,close
 python3 scripts/download_okx_data.py --symbol BTC-USDT --bar 1m --days 30
 ```
 
-回测结束会输出绩效报告，包含初始资金、最终净值、总收益率、最大回撤、夏普比率、总交易次数、盈利/亏损次数、胜率与盈亏比。
+回测结束会输出绩效报告，包含初始资金、最终净值、总收益率、最大回撤、夏普比率、总成交笔数、平仓回合、盈利/亏损次数、未平仓笔数、胜率与盈亏比。
+
+统计口径说明：**总成交笔数**是所有成交的次数；**平仓回合**是买卖配对的完整回合数，胜率与盈亏比只按已平仓回合计算，未平仓的买入单列在"未平仓笔数"，不会被算成 0 笔交易。
 
 ### 模拟交易（Paper Trading）
 
@@ -305,7 +311,8 @@ SYMBOL=ETH-USDT CAPITAL=1000 STRATEGY=multilevel INTERVAL=60 ./paper_service.sh 
 | --- | --- | --- |
 | `-h, --help` | 显示帮助信息（不需要配置文件） | — |
 | `-c, --config` | 配置文件路径 | `config.ini` |
-| `-l, --log` | 日志文件路径 | stderr |
+| `-l, --log` | 日志目录路径（需带目录，文件名由 glog 生成） | stderr |
+| `--v` | glog 详细日志级别，`--v=1` 开启 `VLOG(1)` 调试明细 | `0` |
 | `--backtest` | 启用回测模式 | 关闭 |
 | `--paper` | 启用模拟交易模式 | 关闭 |
 | `--venue` | 执行端口：`auto`、`gateway` 或 `backtest` | `auto`（回测下解析为 `backtest`，其余为 `gateway`） |
@@ -324,6 +331,16 @@ SYMBOL=ETH-USDT CAPITAL=1000 STRATEGY=multilevel INTERVAL=60 ./paper_service.sh 
 | `--mm-inventory-penalty` | 库存惩罚系数 | `0.01` |
 | `--mm-learning-rate` | Actor-Critic 学习率 | `0.0005` |
 | `--mm-exploration` | 探索强度 | `0.05` |
+| `--maker-fee-rate` / `--taker-fee-rate` | 挂单 / 吃单手续费率 | `0.0008` / `0.001` |
+| `--report-interval` | Paper 模式账户摘要间隔（秒） | `60` |
+| `--record-file` | 录制带盘口的实时行情到 CSV | 空（不录制） |
+| `--model-path` | RL 模型权重落盘路径 | 空（不持久化） |
+| `--max-order-quantity` | 事前风控：单笔最大数量，`0` 关闭 | `0` |
+| `--max-order-notional` | 事前风控：单笔最大名义价值，`0` 关闭 | 初始资金 |
+| `--max-position-quantity` | 事前风控：最大净持仓数量，`0` 关闭 | `0` |
+| `--max-net-exposure` | 事前风控：最大净暴露（计价币种），`0` 关闭 | `0` |
+
+事前风控默认启用一条底线：**单笔名义价值不得超过初始资金**（市价单按最新价估算），其余上限默认关闭，可用上表参数显式开启。被风控拒绝的订单会以 `[运行时诊断]` 输出，密集场景每 50 条摘要一次，完整明细用 `--v=1` 查看。
 
 ## 测试
 
@@ -337,7 +354,9 @@ xmake build qitrader-core-tests
 ./scripts/runtime_smoke_test.sh --build   # 先构建再跑
 ```
 
-smoke test 会校验每个组合都能跑完回放、输出绩效报告、以 0 退出码结束，且两个账本最终一致、行情数据源已接通、运行时上下文已注入。
+smoke test 会校验每个组合都能跑完回放、输出绩效报告、以 0 退出码结束，并且**真的产生了成交**（防止绩效统计口径错误时被"零成交"蒙混过关）、**统一账本与回测网关账本最终净值偏差不超过 1%**、行情数据源已接通、运行时上下文已注入。
+
+单元测试在 release 模式下也保留断言（`xmake.lua` 对测试目标强制 `-UNDEBUG`），避免 `assert` 被编译掉后测试恒绿。
 
 ## 配置说明
 
@@ -372,7 +391,7 @@ key = your_wework_key
 - **异步非阻塞**：Boost.Asio 协程，单线程事件循环，无锁竞争
 - **命令队列解耦**：行情回调不等待执行结果，避免嵌套同步事件
 - **幂等设计**：执行回报按 `execution_id` 去重，订单计划带幂等键
-- **高精度计算**：金额使用 `cpp_dec_float_100`，避免浮点累积误差
+- **高精度计算**：金额统一使用 `cpp_dec_float_50`（`common/utils/utils.h` 的 `dec_float`），避免浮点累积误差
 
 ## 问题排查
 
@@ -381,7 +400,9 @@ key = your_wework_key
 | 构建失败 | 依赖未安装完整，确认 Boost、fmt、glog、OpenSSL、CryptoPP、liburing、jsoncpp 均在位 |
 | 实盘/Paper 启动即退出 | 缺少或格式错误的 `config.ini`，日志会打印具体原因 |
 | 提示"未收到行情快照" | 行情数据源未接通，检查 `--venue` 与数据文件 |
-| 出现账本与预期不符 | 执行回报未进入统一账本，核对成交是否都带 `execution_id` |
+| 策略一直不成交 | 先看是否有 `[运行时诊断]`：风控拒绝（名义价值超限）或冻结额度不足；网格参数要覆盖行情价格区间 |
+| 出现账本与预期不符 | 执行回报未进入统一账本，核对成交是否都带 `execution_id`；可用 `--v=1` 查看逐笔成交与手续费 |
+| `--v=1` 无效 | 该参数必须写作 `--v=1`；早期版本会被误解析成 `--venue`，现已显式注册 |
 
 日志基于 glog，默认输出到 stderr。
 

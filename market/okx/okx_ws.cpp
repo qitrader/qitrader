@@ -97,8 +97,6 @@ asio::awaitable<void> OkxWs::read_loop() {
       auto msg = jsoncpp::from_json<market::okx::WsMessage>(rsp);
       co_await read_channel_.async_send(boost::system::error_code{}, *msg, asio::use_awaitable);
       continue;
-    } catch (const boost::system::error_code& e) {
-      errmsg = fmt::format("code {} {}", e.value(), e.what());
     } catch (const std::exception& e) {
       errmsg = e.what();
     } catch (...) {
@@ -134,8 +132,6 @@ asio::awaitable<void> OkxWs::write_loop() {
       co_await ws_->write(msg);
       errors = 0;
       continue;
-    } catch (const boost::system::error_code& e) {
-      errmsg = fmt::format("code {} {}", e.value(), e.what());
     } catch (const std::exception& e) {
       errmsg = e.what();
     } catch (...) {

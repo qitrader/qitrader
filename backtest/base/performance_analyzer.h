@@ -32,6 +32,19 @@ struct TradeRecord {
 };
 
 /**
+ * @brief 交易统计结果
+ */
+struct TradeStats {
+  int total_fills{0};     ///< 成交笔数（买入 + 卖出）
+  int closed_rounds{0};   ///< 已完成的买卖回合数
+  int winning_trades{0};  ///< 盈利回合数
+  int losing_trades{0};   ///< 亏损回合数
+  int open_fills{0};      ///< 尚未平仓的成交笔数
+  dec_float win_rate{0};  ///< 胜率（按已平仓回合计算）
+  dec_float profit_factor{0};
+};
+
+/**
  * @brief 绩效分析器
  */
 class PerformanceAnalyzer {
@@ -71,9 +84,8 @@ class PerformanceAnalyzer {
   /// 计算夏普比率（年化，无风险利率默认为 0）
   dec_float calcSharpeRatio() const;
 
-  /// 计算胜率和盈亏比
-  void calcTradeStats(dec_float& win_rate, dec_float& profit_factor, int& total_trades,
-                      int& winning_trades, int& losing_trades) const;
+  /// 计算成交与胜负统计
+  TradeStats calcTradeStats() const;
 
   dec_float m_initial_capital;                   ///< 初始资金
   std::vector<TradeRecord> m_trades;             ///< 交易记录

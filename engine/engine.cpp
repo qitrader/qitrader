@@ -14,7 +14,7 @@ Engine::~Engine() {
   if (m_running.load()) {
     LOG(WARNING) << "Engine destructor called while still running";
   }
-  // 清理资源
+  // 清理资源：回调先释放，再释放组件。
   m_callbacks.clear();
   m_components.clear();
 }
@@ -59,8 +59,14 @@ asio::awaitable<void> Engine::run() {
 
   // 第二阶段：异步启动所有组件的运行协程
   for (auto& component : m_components) {
-    // 为每个组件启动一个独立的协程，并捕获异常防止崩溃
-    asio::co_spawn(co_await asio::this_coro::executor, [component]() -> asio::awaitable<void> {
+    // 协程只持有组件的弱引用：组件的所有权在引擎的组件表里。
+    // 若协程帧持有强引用，事件循环停止时残留的协程帧被销毁会让引用计数多减，
+    // 组件会在仍被引擎引用的时候被析构，退出期出现 use-after-free。
+    std::weak_ptr<Component> weak_component = component;
+    asio::co_spawn(co_await asio::this_coro::executor,
+        [weak_component]() -> asio::awaitable<void> {
+      auto component = weak_component.lock();
+      if (!component) co_return;
       try {
         co_await component->run();
       } catch (boost::system::system_error &e) {
@@ -176,7 +182,7 @@ asio::awaitable<void> Engine::stop() {
 }
 
 void Engine::register_component(std::shared_ptr<Component> component) {
-  m_components.push_back(component);
+  m_components.push_back(std::move(component));
 }
 
 }

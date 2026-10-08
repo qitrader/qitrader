@@ -146,9 +146,13 @@ void BacktestExecutionVenue::onMarketPrice(const std::string& symbol,
 }
 
 void BacktestExecutionVenue::settleTrades() {
-  const auto& trades = matchEngine().trades();
-  for (std::size_t i = m_trade_cursor; i < trades.size(); ++i) {
-    const auto& trade = trades[i];
+  // emit 会同步回调到策略与账本，可能间接提交新订单并让成交列表重分配。
+  // 因此每轮都重新取引用、并把成交指针拷到局部，避免持有失效的迭代器/引用。
+  for (;;) {
+    const auto& trades = matchEngine().trades();
+    if (m_trade_cursor >= trades.size()) break;
+    const std::shared_ptr<engine::TradeData> trade = trades[m_trade_cursor];
+    ++m_trade_cursor;
     if (!trade || !trade->order) continue;
     for (const auto& item : trade->order->items) {
       if (!item || item->order_id.empty()) continue;
@@ -181,7 +185,12 @@ void BacktestExecutionVenue::settleTrades() {
       m_intents.erase(it);
     }
   }
-  m_trade_cursor = trades.size();
+  // 已结算的成交可以回收：长周期回放（Paper 或长历史）下成交记录会无限增长。
+  // 回收后游标归零，后续成交仍从下标 0 开始结算。
+  if (m_trade_cursor > 0) {
+    matchEngine().trimTradesBefore(m_trade_cursor);
+    m_trade_cursor = 0;
+  }
 }
 
 void BacktestExecutionVenue::emit(const domain::ExecutionReport& report) {

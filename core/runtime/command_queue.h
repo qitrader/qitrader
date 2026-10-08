@@ -24,8 +24,7 @@ struct RuntimeCommand {
  */
 class CommandQueue {
  public:
-  CommandQueue(asio::any_io_executor executor, std::size_t capacity)
-      : m_capacity(capacity) {}
+  explicit CommandQueue(std::size_t capacity) : m_capacity(capacity) {}
 
   /**
    * @brief 非阻塞入队；队列满或已关闭时返回 QUEUE_FULL。

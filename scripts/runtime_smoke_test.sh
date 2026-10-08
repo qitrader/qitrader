@@ -60,7 +60,7 @@ run_case() {
 
   timeout "$TIMEOUT" "$BIN" --backtest --venue "$venue" \
     --strategy "$strategy" --symbol "$SYMBOL" --data-file "$DATA" \
-    --grid-upper 97500 --grid-lower 96800 --grid-count 5 --grid-amount 0.01 \
+    --grid-upper 97800 --grid-lower 96800 --grid-count 5 --grid-amount 0.01 \
     --mm-levels 2 --mm-order-size 0.01 --mm-decision-interval-ms 0 \
     > "$log" 2>&1
   local rc=$?
@@ -71,6 +71,26 @@ run_case() {
   grep -qE "ERROR|terminate|corrupted|Aborted" "$log" && problems+=("日志含错误或崩溃")
   grep -q "未收到行情快照" "$log" && problems+=("行情数据源未接通")
   grep -q "未注入策略运行时上下文" "$log" && problems+=("运行时上下文未注入")
+
+  # 必须真的有成交：只校验"跑完不崩溃"会让绩效统计口径错误（恒为 0 笔）也通过。
+  local fills
+  fills="$(grep -o '总成交笔数: *[0-9]*' "$log" | head -1 | grep -o '[0-9]*$')"
+  [[ -z "$fills" ]] && problems+=("未输出成交统计")
+  [[ -n "$fills" && "$fills" -eq 0 ]] && problems+=("回测零成交")
+
+  # 统一账本与回测网关账本必须一致：两套记账并行，偏差说明某条链路漏记。
+  local report_equity ledger_equity
+  report_equity="$(grep -o '最终净值: *[-0-9.]*' "$log" | head -1 | awk '{print $NF}')"
+  ledger_equity="$(grep -o '账本净值: *[-0-9.]*' "$log" | head -1 | awk '{print $NF}')"
+  if [[ -n "$report_equity" && -n "$ledger_equity" ]]; then
+    awk -v a="$report_equity" -v b="$ledger_equity" 'BEGIN{
+      d = a - b; if (d < 0) d = -d;
+      base = (a < 0 ? -a : a); if (base < 1) base = 1;
+      exit (d / base > 0.01 ? 1 : 0)
+    }' || problems+=("账本不一致(绩效=$report_equity 账本=$ledger_equity)")
+  else
+    problems+=("缺少净值输出")
+  fi
 
   if [[ ${#problems[@]} -eq 0 ]]; then
     printf "  [PASS] %-11s venue=%-9s\n" "$strategy" "$venue"

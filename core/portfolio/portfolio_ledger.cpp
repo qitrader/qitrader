@@ -26,14 +26,22 @@ void PortfolioLedger::bumpVersion(int64_t timestamp_ms) {
   if (timestamp_ms > 0) m_snapshot.timestamp_ms = timestamp_ms;
 }
 
+namespace {
+/// 取订单的计价基准：市价单没有价格，用调用方提供的最新价。
+dec_float priceOf(const domain::OrderIntent& intent, const dec_float& market_price) {
+  if (intent.type == domain::OrderType::MARKET && intent.price <= 0) return market_price;
+  return intent.price > 0 ? intent.price : market_price;
+}
+}  // namespace
+
 domain::CommandResult PortfolioLedger::reserve(const domain::OrderIntent& intent,
-                                                const dec_float& quantity) {
+                                                const dec_float& quantity,
+                                                const dec_float& market_price) {
   if (quantity <= 0 || intent.symbol.empty()) {
     return {false, {domain::ErrorCode::INVALID_ARGUMENT, "invalid reservation"}, {}};
   }
   if (intent.side == domain::Side::BUY) {
-    const dec_float notional = intent.type == domain::OrderType::MARKET
-        ? intent.price * quantity : intent.price * quantity;
+    const dec_float notional = priceOf(intent, market_price) * quantity;
     if (m_snapshot.cash - m_snapshot.frozen_cash < notional) {
       return {false, {domain::ErrorCode::RISK_REJECTED, "insufficient available cash"}, {}};
     }
@@ -50,12 +58,13 @@ domain::CommandResult PortfolioLedger::reserve(const domain::OrderIntent& intent
 }
 
 domain::CommandResult PortfolioLedger::release(const domain::OrderIntent& intent,
-                                                const dec_float& quantity) {
+                                                const dec_float& quantity,
+                                                const dec_float& market_price) {
   if (quantity <= 0 || intent.symbol.empty()) {
     return {false, {domain::ErrorCode::INVALID_ARGUMENT, "invalid release"}, {}};
   }
   if (intent.side == domain::Side::BUY) {
-    const dec_float amount = intent.price * quantity;
+    const dec_float amount = priceOf(intent, market_price) * quantity;
     const dec_float remaining = m_snapshot.frozen_cash - amount;
     m_snapshot.frozen_cash = remaining > 0 ? remaining : dec_float(0);
   } else if (auto* position = findPosition(intent.symbol)) {

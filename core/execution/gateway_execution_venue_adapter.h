@@ -30,7 +30,14 @@ class GatewayExecutionVenueAdapter final : public ExecutionVenue,
   void setCallback(ExecutionCallback callback) override;
 
   /// 关闭执行端口，停止阶段的命令会被直接丢弃。
-  void close() { m_closed.store(true); }
+  ///
+  /// 必须同时释放引擎引用：执行端口由策略运行时持有，而运行时又被
+  /// 引擎持有的组件持有，不释放就形成环，退出时引擎与组件都无法析构。
+  /// 关闭后 submit/cancel 会因引擎为空直接失败，符合停止阶段的预期。
+  void close() {
+    m_closed.store(true);
+    m_engine.reset();
+  }
   bool closed() const { return m_closed.load(); }
 
   /// 等待已投递的引擎事件命令执行完成。

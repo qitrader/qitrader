@@ -10,6 +10,24 @@
 
 namespace backtest::data {
 
+namespace {
+
+// 公历日期 -> 1970-01-01 起的天数（days-from-civil 算法）。
+// 纯整数运算，不依赖进程时区与 DST，也不依赖 timegm 这类非标准接口，
+// 结果等价于该日期 UTC 零点的日序号。
+int64_t daysFromCivil(int year, unsigned month, unsigned day) {
+  year -= month <= 2;
+  const int64_t era = (year >= 0 ? year : year - 399) / 400;
+  const unsigned year_of_era = static_cast<unsigned>(year - era * 400);  // [0, 399]
+  const unsigned day_of_year =
+      (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;          // [0, 365]
+  const unsigned day_of_era =
+      year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;  // [0, 146096]
+  return era * 146097 + static_cast<int64_t>(day_of_era) - 719468;
+}
+
+}  // namespace
+
 CsvLoader::CsvLoader(const std::string& file_path, const std::string& start_date,
                      const std::string& end_date)
     : m_file_path(file_path), m_start_ms(0), m_end_ms(0) {
@@ -183,11 +201,19 @@ int64_t CsvLoader::dateToTimestampMs(const std::string& date) const {
     LOG(ERROR) << "日期格式错误: " << date << "，应为 YYYY-MM-DD";
     return 0;
   }
-  tm.tm_hour = 0;
-  tm.tm_min = 0;
-  tm.tm_sec = 0;
-  auto tp = std::chrono::system_clock::from_time_t(std::mktime(&tm));
-  return std::chrono::duration_cast<std::chrono::milliseconds>(tp.time_since_epoch()).count();
+  // 不能直接用 std::mktime：mktime 按进程本地时区解释 tm，而 CSV 里的
+  // timestamp_ms 是 UTC 毫秒时间戳。在 UTC+8 环境下 "2024-01-01" 会被折算成
+  // 2023-12-31T16:00:00Z，--start-date/--end-date 的过滤边界整体偏移 8 小时，
+  // 首尾数据被误过滤/误保留。std::get_time 只负责解析字段，UTC epoch 换算
+  // 由 daysFromCivil() 完成，与平台和时区无关。
+  const int year = tm.tm_year + 1900;
+  const unsigned month = static_cast<unsigned>(tm.tm_mon) + 1;  // tm_mon: 0~11
+  const unsigned day = static_cast<unsigned>(tm.tm_mday);       // tm_mday: 1~31
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    LOG(ERROR) << "日期取值非法: " << date << "，应为 YYYY-MM-DD";
+    return 0;
+  }
+  return daysFromCivil(year, month, day) * 86400000;
 }
 
 bool CsvLoader::inRange(int64_t timestamp_ms) const {

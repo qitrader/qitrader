@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <limits>
 #include <sstream>
@@ -166,10 +167,27 @@ bool ActorCritic::deserialize(const std::string& data) {
 }
 
 bool ActorCritic::save(const std::string& path) const {
-  std::ofstream out(path, std::ios::out | std::ios::trunc);
-  if (!out) return false;
-  out << serialize();
-  return static_cast<bool>(out);
+  // 不能直接 trunc 打开目标文件：策略每 model_save_interval_steps 步就保存一次，
+  // 写到一半被 kill / 掉电会留下半个文件，下次 load() 解析失败会退回初始权重，
+  // 本次运行的在线学习成果全部丢失。改为先写同目录临时文件，再用 std::rename
+  // 原子替换（同一目录内的 rename 是原子的）；失败时只留下 .tmp，原模型不受损。
+  const std::string tmp_path = path + ".tmp";
+  {
+    std::ofstream out(tmp_path, std::ios::out | std::ios::trunc);
+    if (!out) return false;
+    out << serialize();
+    out.flush();
+    if (!out) {
+      out.close();
+      std::remove(tmp_path.c_str());
+      return false;
+    }
+  }
+  if (std::rename(tmp_path.c_str(), path.c_str()) != 0) {
+    std::remove(tmp_path.c_str());
+    return false;
+  }
+  return true;
 }
 
 bool ActorCritic::load(const std::string& path) {

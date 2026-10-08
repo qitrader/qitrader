@@ -96,7 +96,10 @@ asio::awaitable<std::vector<SendOrderRspDetail>> OkxHttp::send_orders(const std:
   auto resp = co_await request_->request(
     "POST", "/api/v5/trade/batch-orders", jsoncpp::to_json(request));
   auto order_rsp = jsoncpp::from_json<SendOrderRespone>(resp);
-  if (order_rsp->code != 0 && order_rsp->code != 1 && order_rsp->code != 2) {
+  // code: 0=全部成功，1=部分成功，2=全部失败。
+  // 2 曾被当作成功放行，整批失败时上层收不到任何拒单回报，冻结额度永不释放。
+  // 正确做法：只放行 0/1，2 走失败分支由网关逐单回报 REJECTED。
+  if (order_rsp->code != 0 && order_rsp->code != 1) {
     LOG(ERROR) << "send order failed, code: " << order_rsp->code << ", msg: " << order_rsp->msg;
     throw std::runtime_error(fmt::format("send order failed, code: {}, msg: {}", order_rsp->code, order_rsp->msg));
   }
@@ -108,7 +111,10 @@ asio::awaitable<std::vector<CancelOrderRspDetail>> OkxHttp::cancel_orders(const 
   auto resp = co_await request_->request(
     "POST", "/api/v5/trade/cancel-batch-orders", jsoncpp::to_json(request));
   auto order_rsp = jsoncpp::from_json<CancelOrderRespone>(resp);
-  if (order_rsp->code != 0) {
+  // 与批量下单同一套语义：0=全部成功，1=部分成功，2=全部失败。
+  // 部分成功时也必须返回明细，由网关按每条 sCode 判断成败；
+  // 整批直接抛异常会让已撤成功的单子得不到回报，冻结额度无法释放。
+  if (order_rsp->code != 0 && order_rsp->code != 1 && order_rsp->code != 2) {
     LOG(ERROR) << "cancel order failed, code: " << order_rsp->code << ", msg: " << order_rsp->msg;
     throw std::runtime_error(fmt::format("cancel order failed, code: {}, msg: {}", order_rsp->code, order_rsp->msg));
   }

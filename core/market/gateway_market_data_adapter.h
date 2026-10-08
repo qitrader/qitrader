@@ -30,6 +30,9 @@ class GatewayMarketDataAdapter final : public MarketDataFeed,
   static domain::MarketSnapshot fromBar(const engine::BarData& bar);
   static void mergeBook(domain::MarketSnapshot& snapshot, const engine::Book& book);
 
+  /// 关闭行情源：释放引擎引用，打断"引擎 -> 组件 -> 运行时 -> 行情源 -> 引擎"的环。
+  void close() override { m_engine.reset(); }
+
   engine::EnginePtr m_engine;
   MarketEventCallback m_callback;
 };

@@ -35,6 +35,14 @@ class OkxWs : public std::enable_shared_from_this<OkxWs> {
     co_await write_channel_.async_send(boost::system::error_code{}, msg_str, asio::use_awaitable);
   }
 
+  /**
+   * @brief 发送原始文本帧（如 OKX 要求的应用层心跳 "ping"）。
+   *
+   * 结构化请求走 write()，它会被 jsoncpp 序列化成 JSON；
+   * 心跳必须是裸文本，带引号的 "ping" 服务端不认。
+   */
+  asio::awaitable<void> write_raw(const std::string& text);
+
  private:
   asio::awaitable<void> read_loop();
   asio::awaitable<void> write_loop();
@@ -47,6 +55,10 @@ class OkxWs : public std::enable_shared_from_this<OkxWs> {
 
   /// 连接是否已作废（被看门狗中断或错误过多），用于让读写循环退出
   std::atomic<bool> m_stopped{false};
+
+  /// 握手是否已完成。未完成时底层 close() 会访问空指针而崩溃，
+  /// 连接失败后上层会立刻 interrupt()，必须据此跳过 close()。
+  std::atomic<bool> connected_{false};
 
   std::unique_ptr<cpphttp::WebSocket> ws_;
   std::string uri_ = "/ws/v5/public";

@@ -95,7 +95,14 @@ asio::awaitable<void> Engine::run() {
       }
 
       // 停止阶段不再分发业务事件，避免关闭流程中继续回调组件。
-      if (m_stopping.load()) continue;
+      // 但完成信号必须照常发送：同步发送方可能刚刚通过入口处的 m_stopping
+      // 检查并挂起等待，这里漏发会让它永久挂起（回测回放每帧都会调用一次）。
+      if (m_stopping.load()) {
+        if (event->completion) {
+          event->completion->try_send(boost::system::error_code());
+        }
+        continue;
+      }
       
       // 获取该事件类型对应的所有回调函数，串行执行保证顺序。
       // 遍历前建立快照，避免回调期间注册新回调导致迭代器失效。

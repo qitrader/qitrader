@@ -124,6 +124,9 @@ class StrategyRuntime : public std::enable_shared_from_this<StrategyRuntime> {
     // 退出期容易与组件析构形成释放竞争。这里在引擎停止流程中主动断开。
     m_market_handler = nullptr;
     m_execution_handler = nullptr;
+    // 行情数据源同样可能持有引擎引用（网关行情适配器），
+    // 不一起关闭的话环依然存在，退出时引擎与组件都无法析构。
+    if (m_feed) m_feed->close();
     if (auto* gateway = dynamic_cast<execution::GatewayExecutionVenueAdapter*>(m_venue.get())) {
       gateway->close();
     }

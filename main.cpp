@@ -277,8 +277,14 @@ int main(int argc, char* argv[]) {
     runtime = std::make_shared<core::runtime::StrategyRuntime>(
         ledger, risk, venue, queue);
     runtime->setEngineExecutor(engine->executor());
-    runtime->setActiveChecker([engine]() {
-      return engine->is_running() && !engine->is_stopping();
+    // 这里只能捕获弱引用：策略运行时被策略持有、策略又被引擎持有，
+    // 若这里再强引用引擎就形成环，退出时引擎与组件都无法释放。
+    std::weak_ptr<engine::Engine> active_engine = engine;
+    runtime->setActiveChecker([active_engine]() {
+      if (auto engine_ptr = active_engine.lock()) {
+        return engine_ptr->is_running() && !engine_ptr->is_stopping();
+      }
+      return false;
     });
     runtime->setDiagnosticCallback(
         [](const core::domain::RuntimeDiagnostic& diagnostic) {

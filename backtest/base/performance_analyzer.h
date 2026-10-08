@@ -69,12 +69,41 @@ class PerformanceAnalyzer {
   void addEquitySnapshot(const dec_float& equity, int64_t timestamp_ms);
 
   /**
+   * @brief 裁剪指定时间之前、且已结算（买卖已配对完）的历史成交记录
+   *
+   * 长期运行时成交记录只增不减，内存单调增长，收尾报告的统计也会退化。
+   * 这里只移除"已经结算"的前缀：即该位置之前买卖已全部配对完、
+   * 不会再被后续成交引用的部分；未平仓的买入始终保留，剩余区间的
+   * FIFO 配对结果也不改变。被裁剪部分的统计由累计计数器保存，
+   * 报告的累计口径不随裁剪变化。
+   *
+   * @param timestamp_ms 保留窗口起点（毫秒），早于该时间的记录才可能被裁剪
+   */
+  void trimTradesBefore(int64_t timestamp_ms);
+
+  /**
+   * @brief 限制净值曲线的最大采样点数，超出后丢弃最旧的快照
+   *
+   * 被丢弃快照中出现过的最高净值与最大回撤会并入历史值，
+   * 保证长期运行的最大回撤不会因裁剪被系统性低估。
+   *
+   * @param max_points 最大点数，0 表示不限制（回测默认不限制）
+   */
+  void setMaxEquityPoints(std::size_t max_points);
+
+  /**
    * @brief 输出绩效报告到终端
    * @param final_equity 最终净值
    */
   void report(const dec_float& final_equity) const;
 
  private:
+  /// 统计 [0, count) 区间内已平仓的回合，累加到裁剪计数器（口径同 calcTradeStats）
+  void accumulateClosedStats(std::size_t count);
+
+  /// 按点数上限丢弃最旧的净值快照，并把回撤信息并入历史值
+  void applyEquityCap();
+
   /// 计算总收益率
   dec_float calcTotalReturn(const dec_float& final_equity) const;
 
@@ -90,6 +119,18 @@ class PerformanceAnalyzer {
   dec_float m_initial_capital;                   ///< 初始资金
   std::vector<TradeRecord> m_trades;             ///< 交易记录
   std::vector<std::pair<int64_t, dec_float>> m_equity_curve;  ///< 净值曲线 (timestamp, equity)
+
+  std::size_t m_max_equity_points{0};       ///< 净值曲线最大点数，0 表示不限制
+  dec_float m_historical_peak{0};           ///< 已裁剪快照中的最高净值
+  dec_float m_historical_max_drawdown{0};   ///< 已裁剪快照中出现过的最大回撤
+
+  // 已裁剪成交的累计统计：保证"总成交笔数"等报告口径不随回收变化
+  int m_trimmed_fills{0};          ///< 已裁剪的成交笔数
+  int m_trimmed_closed_rounds{0};  ///< 已裁剪部分统计出的平仓回合数
+  int m_trimmed_winning{0};        ///< 已裁剪部分的盈利回合数
+  int m_trimmed_losing{0};         ///< 已裁剪部分的亏损回合数
+  dec_float m_trimmed_profit{0};   ///< 已裁剪部分的总盈利
+  dec_float m_trimmed_loss{0};     ///< 已裁剪部分的总亏损
 };
 
 }  // namespace backtest::base

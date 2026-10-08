@@ -23,6 +23,114 @@ void PerformanceAnalyzer::addTrade(std::shared_ptr<engine::TradeData> trade) {
 
 void PerformanceAnalyzer::addEquitySnapshot(const dec_float& equity, int64_t timestamp_ms) {
   m_equity_curve.push_back({timestamp_ms, equity});
+  applyEquityCap();
+}
+
+void PerformanceAnalyzer::setMaxEquityPoints(std::size_t max_points) {
+  m_max_equity_points = max_points;
+  applyEquityCap();
+}
+
+void PerformanceAnalyzer::applyEquityCap() {
+  if (m_max_equity_points == 0 || m_equity_curve.size() <= m_max_equity_points) return;
+
+  const std::size_t drop = m_equity_curve.size() - m_max_equity_points;
+  // 被丢弃的快照仍要参与最大回撤统计：先把它们的最高净值与回撤并入历史值，
+  // 否则长期运行的最大回撤会随着裁剪被系统性低估。
+  for (std::size_t i = 0; i < drop; ++i) {
+    const dec_float& equity = m_equity_curve[i].second;
+    if (equity > m_historical_peak) m_historical_peak = equity;
+    if (m_historical_peak > 0) {
+      const dec_float dd = (m_historical_peak - equity) / m_historical_peak;
+      if (dd > m_historical_max_drawdown) m_historical_max_drawdown = dd;
+    }
+  }
+  m_equity_curve.erase(m_equity_curve.begin(),
+                       m_equity_curve.begin() + static_cast<std::ptrdiff_t>(drop));
+}
+
+void PerformanceAnalyzer::trimTradesBefore(int64_t timestamp_ms) {
+  if (m_trades.empty() || timestamp_ms <= 0) return;
+
+  // 先按与 calcTradeStats 相同的 FIFO 口径复算一遍，找出可以安全裁剪的前缀：
+  // 只有"该笔之后没有任何未平仓残量"的位置才是完整回合的边界。
+  std::map<std::string, std::deque<TradeRecord>> open_positions;
+  std::size_t scanned = 0;
+  std::size_t safe = 0;  // 最后一个"全部平仓"位置之前的元素个数
+  for (const auto& trade : m_trades) {
+    if (trade.timestamp_ms >= timestamp_ms) break;  // 成交按到达顺序追加，可直接停止
+
+    if (trade.direction == engine::Direction::BUY) {
+      open_positions[trade.symbol].push_back(trade);
+    } else {
+      auto position_it = open_positions.find(trade.symbol);
+      if (position_it != open_positions.end()) {
+        auto& positions = position_it->second;
+        dec_float remaining = trade.volume;
+        while (remaining > 0 && !positions.empty()) {
+          auto& open = positions.front();
+          const dec_float matched_volume =
+              open.volume < remaining ? open.volume : remaining;
+          open.volume -= matched_volume;
+          remaining -= matched_volume;
+          if (open.volume <= 0) positions.pop_front();
+        }
+      }
+    }
+    ++scanned;
+
+    bool all_flat = true;
+    for (const auto& [symbol, positions] : open_positions) {
+      if (!positions.empty()) {
+        all_flat = false;
+        break;
+      }
+    }
+    if (all_flat) safe = scanned;
+  }
+
+  // 窗口之前仍有未平仓的买入，裁剪会丢掉它们与后续卖出的配对，故整体放弃。
+  if (safe == 0) return;
+
+  accumulateClosedStats(safe);
+  m_trimmed_fills += static_cast<int>(safe);
+  m_trades.erase(m_trades.begin(), m_trades.begin() + static_cast<std::ptrdiff_t>(safe));
+}
+
+void PerformanceAnalyzer::accumulateClosedStats(std::size_t count) {
+  std::map<std::string, std::deque<TradeRecord>> open_positions;
+  for (std::size_t i = 0; i < count && i < m_trades.size(); ++i) {
+    const TradeRecord& trade = m_trades[i];
+    if (trade.direction == engine::Direction::BUY) {
+      open_positions[trade.symbol].push_back(trade);
+      continue;
+    }
+
+    auto position_it = open_positions.find(trade.symbol);
+    if (position_it == open_positions.end()) continue;
+    auto& positions = position_it->second;
+    dec_float remaining = trade.volume;
+
+    while (remaining > 0 && !positions.empty()) {
+      auto& open = positions.front();
+      const dec_float matched_volume =
+          open.volume < remaining ? open.volume : remaining;
+      const dec_float pnl = (trade.price - open.price) * matched_volume;
+
+      ++m_trimmed_closed_rounds;
+      if (pnl > 0) {
+        ++m_trimmed_winning;
+        m_trimmed_profit += pnl;
+      } else if (pnl < 0) {
+        ++m_trimmed_losing;
+        m_trimmed_loss += boost::multiprecision::abs(pnl);
+      }
+
+      open.volume -= matched_volume;
+      remaining -= matched_volume;
+      if (open.volume <= 0) positions.pop_front();
+    }
+  }
 }
 
 void PerformanceAnalyzer::report(const dec_float& final_equity) const {
@@ -60,10 +168,13 @@ dec_float PerformanceAnalyzer::calcTotalReturn(const dec_float& final_equity) co
 }
 
 dec_float PerformanceAnalyzer::calcMaxDrawdown() const {
-  if (m_equity_curve.empty()) return dec_float(0);
+  if (m_equity_curve.empty()) return m_historical_max_drawdown;
 
-  dec_float peak = m_equity_curve[0].second;
-  dec_float max_dd = dec_float(0);
+  // 已裁剪快照里出现过的最高净值要继续作为回撤基准，
+  // 否则净值创新高后的回撤会因为基准被裁掉而算不出来。
+  dec_float peak = m_historical_peak > m_equity_curve[0].second
+      ? m_historical_peak : m_equity_curve[0].second;
+  dec_float max_dd = m_historical_max_drawdown;
 
   for (const auto& [ts, equity] : m_equity_curve) {
     if (equity > peak) {
@@ -133,10 +244,13 @@ dec_float PerformanceAnalyzer::calcSharpeRatio() const {
 
 TradeStats PerformanceAnalyzer::calcTradeStats() const {
   TradeStats stats;
-  stats.total_fills = static_cast<int>(m_trades.size());
-  int total_trades = 0;
-  dec_float total_profit(0);
-  dec_float total_loss(0);
+  // 累计口径必须包含已裁剪的历史成交：裁剪只是回收内存，不代表这些成交没发生过。
+  stats.total_fills = m_trimmed_fills + static_cast<int>(m_trades.size());
+  int total_trades = m_trimmed_closed_rounds;
+  int winning_trades = m_trimmed_winning;
+  int losing_trades = m_trimmed_losing;
+  dec_float total_profit = m_trimmed_profit;
+  dec_float total_loss = m_trimmed_loss;
 
   // 按品种使用 FIFO 配对买卖，支持部分成交和不同成交数量。
   std::map<std::string, std::deque<TradeRecord>> open_positions;
@@ -159,10 +273,10 @@ TradeStats PerformanceAnalyzer::calcTradeStats() const {
 
       ++total_trades;
       if (pnl > 0) {
-        ++stats.winning_trades;
+        ++winning_trades;
         total_profit += pnl;
       } else if (pnl < 0) {
-        ++stats.losing_trades;
+        ++losing_trades;
         total_loss += boost::multiprecision::abs(pnl);
       }
 
@@ -179,7 +293,9 @@ TradeStats PerformanceAnalyzer::calcTradeStats() const {
       if (open.volume > 0) ++stats.open_fills;
     }
   }
-  stats.win_rate = total_trades > 0 ? dec_float(stats.winning_trades) / dec_float(total_trades)
+  stats.winning_trades = winning_trades;
+  stats.losing_trades = losing_trades;
+  stats.win_rate = total_trades > 0 ? dec_float(winning_trades) / dec_float(total_trades)
                                     : dec_float(0);
   stats.profit_factor = total_loss > 0 ? total_profit / total_loss : dec_float(0);
   return stats;

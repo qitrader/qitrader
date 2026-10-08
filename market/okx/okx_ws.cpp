@@ -38,6 +38,8 @@ asio::awaitable<void> OkxWs::connect() {
   ws_->add_header("User-Agent", "qitrader");
 
   co_await ws_->connect();
+  // 握手成功后才允许 close()：未连接时底层指针为空，close() 会崩溃
+  connected_.store(true);
 
   auto self = shared_from_this();
   co_spawn(
@@ -66,7 +68,11 @@ void OkxWs::interrupt() {
   // 底层 TCP 连接也必须关闭：只关通道的话，对端发来 FIN 后 socket 会一直停在
   // CLOSE-WAIT，每次重连泄漏一个 fd（线上曾累积到 5 个）。close() 是协程，
   // 这里捕获 shared_from_this() 保证关闭期间 ws_ 仍然存活。
-  if (ws_) {
+  //
+  // 必须先判断是否完成握手：底层 close() 在尚未成功 connect() 时内部指针为空
+  // 会直接崩溃；连接失败后上层会立刻 interrupt()，这时绝不能调用 close()。
+  // exchange 同时保证只关一次。
+  if (ws_ && connected_.exchange(false)) {
     auto self = shared_from_this();
     asio::co_spawn(
         executor_,
@@ -94,6 +100,10 @@ asio::awaitable<void> OkxWs::read_loop() {
     try {
       auto rsp = co_await ws_->read();
       errors = 0;  // 成功读取即重置连续错误计数
+      // OKX 对应用层心跳 "ping" 的应答是纯文本 "pong"，不是 JSON。
+      // 直接解析会抛异常；私有频道推送稀疏时连续 5 次就会把连接判死，
+      // 而判死后即使重连也再没人读取（与行情停滞同后果）。
+      if (rsp == "pong") continue;
       auto msg = jsoncpp::from_json<market::okx::WsMessage>(rsp);
       co_await read_channel_.async_send(boost::system::error_code{}, *msg, asio::use_awaitable);
       continue;
@@ -151,6 +161,11 @@ asio::awaitable<void> OkxWs::write_loop() {
     m_stopped.store(true);
     write_channel_.close();
   }
+}
+
+// 发送原始文本帧（应用层心跳）。与 write() 唯一区别是不做 JSON 序列化。
+asio::awaitable<void> OkxWs::write_raw(const std::string& text) {
+  co_await write_channel_.async_send(boost::system::error_code{}, text, asio::use_awaitable);
 }
 
 std::string get_sign(std::string timestamp, std::string secret_key) {

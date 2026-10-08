@@ -9,6 +9,33 @@ using namespace std::chrono_literals;
 
 namespace market::paper {
 
+/// 绩效数据保留窗口：超出窗口且已结算的成交会被裁剪，避免长期运行时内存单调增长
+constexpr int64_t kAnalyzerRetentionMs = 24 * 60 * 60 * 1000;
+/// 净值曲线最多保留的采样点数，超出后丢弃最旧快照（60s 摘要约 7 天）
+constexpr std::size_t kMaxEquityPoints = 10080;
+
+namespace {
+
+/// 对称释放冻结额度：冻结量足够时直接扣减；不足时记录 WARNING 后归零。
+/// 之前的写法是"先减再钳到 0"，单笔释放量大于累计冻结时会把其它挂单的
+/// 冻结额度一并抹掉（超额释放），且没有任何日志，出问题只能靠猜。
+void releaseReserved(dec_float& reserved, const dec_float& amount,
+                     const std::string& what, const std::string& order_id) {
+  if (amount <= 0) return;
+  if (reserved >= amount) {
+    reserved -= amount;
+    return;
+  }
+  LOG(WARNING) << fmt::format(
+      "[模拟交易] 释放冻结{}超额：订单 {} 期望释放 {}，当前冻结 {}，已归零，"
+      "请检查下单/撤单/成交的冻结记账是否对称",
+      what, order_id, amount.str(8, std::ios_base::fixed),
+      reserved.str(8, std::ios_base::fixed));
+  reserved = dec_float(0);
+}
+
+}  // namespace
+
 PaperGateway::PaperGateway(engine::EnginePtr engine, const dec_float& initial_capital,
                            int report_interval_s, const dec_float& maker_fee_rate,
                            const dec_float& taker_fee_rate)
@@ -24,7 +51,9 @@ PaperGateway::PaperGateway(engine::EnginePtr engine, const dec_float& initial_ca
       m_report_interval_s(report_interval_s > 0 ? report_interval_s : 60) {
   // 设置撮合引擎的成交回调
   m_match_engine.setOnTrade(
-      [this](auto order, auto trade) { onTradeEvent(order, trade); });
+      [this](auto order, auto trade) { onTradeEvent(order, trade);
+  // 长期运行的净值快照必须有上限，否则曲线会无界增长（回测侧默认不限制）。
+  m_analyzer.setMaxEquityPoints(kMaxEquityPoints); });
 }
 
 // ============================================================
@@ -90,6 +119,9 @@ int64_t PaperGateway::nowMs() {
 
 /// 行情停滞超过该秒数即判定连接静默挂起
 constexpr int kStallThresholdS = 180;
+/// 启动宽限期：这段时间内一条行情都没有属于正常（订阅刚发出、对端尚未推送）。
+/// 超过该时长仍一条行情都没收到，说明订阅没生效或连接是死的，必须按停滞处理。
+constexpr int kNoTickGraceS = 120;
 /// 行情正常时的推送间隔远小于该值，作为看门狗的扫描周期
 constexpr int kWatchdogIntervalS = 30;
 /// 连续中断该次数后行情仍未恢复，就主动退出进程，交给守护脚本重启。
@@ -109,17 +141,33 @@ asio::awaitable<void> PaperGateway::watchdogLoop() {
     if (m_stopped.load()) break;
 
     const int64_t last = m_last_tick_time_ms.load();
-    if (last <= 0) continue;  // 尚未收到过行情，交给连接阶段处理
-    const int64_t stall_s = (nowMs() - last) / 1000;
-    if (stall_s < kStallThresholdS) {
-      stall_strikes = 0;  // 行情已恢复，重新计数
-      continue;
+    int64_t stall_s = 0;
+    if (last > 0) {
+      stall_s = (nowMs() - last) / 1000;
+      if (stall_s < kStallThresholdS) {
+        stall_strikes = 0;  // 行情已恢复，重新计数
+        continue;
+      }
+    } else {
+      // 从未收到过行情：连接已建立却没有任何推送（订阅失败、订阅的品种无行情、
+      // 对端静默），这正是看门狗要覆盖的场景，不能跳过。用启动时刻起算，
+      // 先给出订阅生效的宽限期，超期仍一条行情都没有就按停滞处理。
+      const int64_t silent_s =
+          m_start_time_ms > 0 ? (nowMs() - m_start_time_ms) / 1000 : 0;
+      if (silent_s < kNoTickGraceS) continue;  // 启动宽限期内不判定
+      stall_s = silent_s;
     }
 
     // 连接可能仍是 ESTABLISHED 却不再推送，read() 会一直挂起，
     // 不主动打断的话策略会静默停摆且无人察觉。
-    LOG(ERROR) << fmt::format(
-        "[模拟交易] 行情已停滞 {}s，判定连接静默挂起，主动中断以触发重连", stall_s);
+    if (last > 0) {
+      LOG(ERROR) << fmt::format(
+          "[模拟交易] 行情已停滞 {}s，判定连接静默挂起，主动中断以触发重连", stall_s);
+    } else {
+      LOG(ERROR) << fmt::format(
+          "[模拟交易] 连接建立后 {}s 仍未收到任何行情（订阅可能未生效或对端静默），"
+          "判定连接静默挂起，主动中断以触发重连", stall_s);
+    }
     ++m_reconnect_count;
     if (ws_public_) ws_public_->interrupt();
 
@@ -151,6 +199,10 @@ void PaperGateway::reportSnapshot() {
   int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::system_clock::now().time_since_epoch()).count();
   m_analyzer.addEquitySnapshot(equity, now_ms);
+  // 长期运行必须定期回收：成交记录与净值曲线只增不减会让内存单调增长，
+  // 收尾报告的计算量也会随成交数退化。裁剪只移除窗口外已结算的回合，
+  // 累计口径由 PerformanceAnalyzer 的计数器保存，报告数字不受影响。
+  m_analyzer.trimTradesBefore(now_ms - kAnalyzerRetentionMs);
 
   const dec_float pnl = equity - m_initial_capital;
   const dec_float return_rate = m_initial_capital > 0
@@ -274,6 +326,13 @@ asio::awaitable<void> PaperGateway::watch_public() {
 
     // 连接可能已被看门狗中断而失效，重建后需要重新订阅原有品种。
     if (m_stopped.load()) co_return;
+    // 旧连接必须先 interrupt()：OkxWs::connect() 把 shared_from_this() 捕获进
+    // 读写协程，协程不退出则连接与 fd 都不释放。market_init() 会用新对象覆盖
+    // ws_public_，只覆盖而不打断的话每次重连都泄漏一条连接（含一个 fd）。
+    if (ws_public_) {
+      LOG(WARNING) << "[模拟交易] 重建行情连接前先中断旧连接，避免连接与 fd 泄漏";
+      ws_public_->interrupt();
+    }
     try {
       co_await market_init();
       for (const auto& symbol : m_subscribed_symbols) {
@@ -525,12 +584,11 @@ asio::awaitable<void> PaperGateway::cancel_order(engine::OrderDataPtr order) {
       const dec_float remaining = cancelled_item->volume - cancelled_item->filled_volume;
       if (cancelled_item->direction == engine::Direction::BUY &&
           cancelled_item->otype == engine::OrderType::LIMIT) {
-        m_reserved_cash -= cancelled_item->price * remaining;
-        if (m_reserved_cash < 0) m_reserved_cash = dec_float(0);
+        releaseReserved(m_reserved_cash, cancelled_item->price * remaining,
+                        "资金", item->order_id);
       } else if (cancelled_item->direction == engine::Direction::SELL &&
                  cancelled_item->otype == engine::OrderType::LIMIT) {
-        m_reserved_position_volume -= remaining;
-        if (m_reserved_position_volume < 0) m_reserved_position_volume = dec_float(0);
+        releaseReserved(m_reserved_position_volume, remaining, "持仓", item->order_id);
       }
     }
 
@@ -595,6 +653,13 @@ asio::awaitable<void> PaperGateway::subscribe_book(engine::SubscribeDataPtr data
 
   m_subscribed_symbols.insert(data->symbol);
 
+  // market_init 失败时 ws_public_ 可能为空，直接 write 会解引用空指针。
+  // 品种仍留在 m_subscribed_symbols 里，连接重建后会自动补订阅。
+  if (!ws_public_) {
+    LOG(ERROR) << fmt::format("[模拟交易] WebSocket 未连接，暂无法订阅订单簿: {}", data->symbol);
+    co_return;
+  }
+
   auto sub_req = WsSubscibeRequest();
   sub_req.op = "subscribe";
   sub_req.args = {{"books", data->symbol}};
@@ -608,6 +673,12 @@ asio::awaitable<void> PaperGateway::subscribe_tick(engine::SubscribeDataPtr data
   if (!data) co_return;
 
   m_subscribed_symbols.insert(data->symbol);
+
+  // 同上：未连接时只记录订阅意图，等连接重建后补订阅。
+  if (!ws_public_) {
+    LOG(ERROR) << fmt::format("[模拟交易] WebSocket 未连接，暂无法订阅 Tick: {}", data->symbol);
+    co_return;
+  }
 
   auto sub_req = WsSubscibeRequest();
   sub_req.op = "subscribe";
@@ -653,12 +724,20 @@ void PaperGateway::onTradeEvent(std::shared_ptr<engine::OrderData> order,
     }
   }
   if (is_limit_order) {
+    // 取订单号仅用于日志定位；撮合器给出的成交可能不带订单。
+    std::string order_id = trade->trade_id;
+    if (trade->order) {
+      for (const auto& item : trade->order->items) {
+        if (item && !item->order_id.empty()) {
+          order_id = item->order_id;
+          break;
+        }
+      }
+    }
     if (trade->direction == engine::Direction::BUY) {
-      const dec_float amount = trade->price * trade->volume;
-      m_reserved_cash = m_reserved_cash > amount ? m_reserved_cash - amount : dec_float(0);
+      releaseReserved(m_reserved_cash, trade->price * trade->volume, "资金", order_id);
     } else {
-      m_reserved_position_volume = m_reserved_position_volume > trade->volume
-          ? m_reserved_position_volume - trade->volume : dec_float(0);
+      releaseReserved(m_reserved_position_volume, trade->volume, "持仓", order_id);
     }
   }
 

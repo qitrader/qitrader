@@ -18,7 +18,11 @@ double toDouble(const dec_float& value) {
 }
 
 dec_float toDecimal(double value) {
-  return dec_float(std::to_string(value));
+  // 不能用 std::to_string：它固定只输出 6 位小数，而构造函数已把 order_size
+  // 下限放宽到 1e-8，小于 5e-7 的数量/价格会被量化成 "0.000000"，随后被
+  // add_intent() 里的 quantity <= 0 / price <= 0 静默丢弃，小面额品种永远不下单。
+  // 17 位有效数字是 double 的无损往返精度，既保得住 1e-8 量级，也不会引入虚假尾数。
+  return dec_float(fmt::format("{:.17g}", value));
 }
 
 }  // namespace

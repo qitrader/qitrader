@@ -22,6 +22,10 @@ using MarketEventCallback = std::function<void(const domain::MarketSnapshot&)>;
 class MarketDataFeed {
  public:
   virtual ~MarketDataFeed() = default;
+
+  /// 关闭数据源：默认无需动作，持有外部引用的实现（如网关行情适配器）覆写以释放引用。
+  virtual void close() {}
+
   virtual domain::CommandResult subscribe(const domain::MarketSubscription& subscription) = 0;
   virtual asio::awaitable<void> run() { co_return; }
   virtual void setCallback(MarketEventCallback callback) = 0;

@@ -154,9 +154,9 @@ private:
   /// 事件类型到回调函数列表的映射
   std::map<EventType, std::vector<EventCallback>> m_callbacks;
   
-  /// 所有注册的组件列表。
-  /// 注意：网关类组件自身持有引擎，引擎再强引用组件会形成环，
-  /// 退出时引擎与组件都无法释放（已知问题，需把网关改为弱引用才能根治）。
+  /// 所有注册的组件列表（引擎独占组件引用）。
+  /// 网关类组件持有的是引擎弱引用（见 market/base/gateway.h），
+  /// 因此这里强引用组件不会形成环；组件的析构由引擎停止流程统一收口。
   std::vector<std::shared_ptr<Component>> m_components;
 
   /// 引擎运行状态标志

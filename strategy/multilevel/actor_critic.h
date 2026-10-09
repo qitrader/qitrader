@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <random>
+#include <string>
 #include <vector>
 
 namespace strategy::multilevel {
@@ -43,7 +44,20 @@ class ActorCritic {
   /// 从文件加载参数。
   bool load(const std::string& path);
 
+  /// 回到构造时的确定性初始化，丢弃全部在线学习成果（用于从零重训）。
+  /// 只重置可学习参数，不重置配置指纹与随机数引擎。
+  void reset();
+
+  /// 设置配置指纹（如 "levels=3,min_half_spread_bps=24"）。
+  /// 指纹会写入权重文件首行；加载时指纹不匹配的文件会被拒绝，
+  /// 避免"参数换档后仍静默复用失效权重"（6bps -> 24bps 就属于这种情况）。
+  void setConfigFingerprint(const std::string& fingerprint);
+
+  const std::string& configFingerprint() const { return m_config_fingerprint; }
+
  private:
+  /// 构造函数与 reset() 共用的确定性初始化
+  void initializeParameters();
   std::vector<double> logits(const std::vector<double>& observation) const;
   std::vector<double> softmax(const std::vector<double>& values) const;
 
@@ -63,6 +77,9 @@ class ActorCritic {
   /// Logistic-Normal 的策略梯度要用 (z - μ)，而不是 softmax 空间里的差值。
   std::vector<double> m_last_mean;
   std::vector<double> m_last_sample;
+
+  /// 配置指纹，写入权重文件首行用于兼容性校验
+  std::string m_config_fingerprint;
 };
 
 }  // namespace strategy::multilevel

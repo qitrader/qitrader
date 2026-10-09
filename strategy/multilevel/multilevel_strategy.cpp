@@ -25,6 +25,38 @@ dec_float toDecimal(double value) {
   return dec_float(fmt::format("{:.17g}", value));
 }
 
+/// 量化方向：买单向下、卖单向上，避免把买卖报价压到同一价位。
+enum class TickRounding { NEAREST, DOWN, UP };
+
+/// 报价量化步长：按价格量级取固定的十进制精度。
+/// 不能用随盘口/中价变化的 tickSize() 来量化：tick 本身每帧都在变，
+/// 量化后的价格照样每帧不同，起不到稳定报价的作用（撤单率不会下降）。
+double quoteTick(double price) {
+  if (!(price > 0.0)) return 0.0;
+  if (price >= 1000.0) return 0.1;
+  if (price >= 100.0) return 0.01;
+  if (price >= 10.0) return 0.001;
+  if (price >= 1.0) return 0.0001;
+  return 0.000001;
+}
+
+/// 把价格量化到 tick 的整数倍后再写进 intent。
+/// 报价价 = 保留价 ± 偏移，是随中价连续变化的量；不量化时中价每动一点，
+/// 价格字符串就变，OrderManager 会把所有档位判成"需换单"（线上实测每帧
+/// 全撤全挂、撤单率 83%）。量化后只有跨过半个 tick 才产生新价格。
+/// 量化在十进制空间做（整数步数 × tick 的十进制值），避免浮点乘除引入尾数。
+dec_float toDecimal(double value, double tick, TickRounding rounding) {
+  if (!(tick > 0.0) || !std::isfinite(value)) return toDecimal(value);
+  double steps = 0.0;
+  switch (rounding) {
+    case TickRounding::DOWN: steps = std::floor(value / tick); break;
+    case TickRounding::UP: steps = std::ceil(value / tick); break;
+    case TickRounding::NEAREST: steps = std::round(value / tick); break;
+  }
+  if (!std::isfinite(steps)) return toDecimal(value);
+  return dec_float(fmt::format("{:.0f}", steps)) * dec_float(fmt::format("{:.17g}", tick));
+}
+
 }  // namespace
 
 MultiLevelMarketMakingStrategy::MultiLevelMarketMakingStrategy(MultiLevelConfig config)
@@ -37,26 +69,37 @@ MultiLevelMarketMakingStrategy::MultiLevelMarketMakingStrategy(MultiLevelConfig 
   m_config.order_size = std::max(0.00000001, m_config.order_size);
   m_config.inventory_limit = std::max(m_config.order_size, m_config.inventory_limit);
   m_config.decision_interval_ms = std::max<int64_t>(0, m_config.decision_interval_ms);
+  // 配置指纹写入权重文件：levels / min_half_spread_bps 变了以后，旧权重的
+  // 观测与动作语义都不再成立（例如半价差 6bps -> 24bps），加载时必须被拒绝，
+  // 而不是静默复用一份已经失效的策略。
+  m_policy.setConfigFingerprint(fmt::format("levels={},min_half_spread_bps={:g}",
+                                            m_config.levels, m_config.min_half_spread_bps));
   loadModel();
 }
 
 bool MultiLevelMarketMakingStrategy::loadModel() {
-  if (m_config.model_path.empty()) return false;
+  if (m_config.reset_model) {
+    m_policy.reset();
+    LOG(INFO) << "[多层级做市] reset_model=true：已回到初始权重，不加载已有模型";
+    return false;
+  }
+  // 读取路径可单独指定：默认与保存路径相同，评估/换档时读旧、写新互不干扰。
+  const std::string path = m_config.model_load_path.empty() ? m_config.model_path
+                                                            : m_config.model_load_path;
+  if (path.empty()) return false;
 
-  std::ifstream probe(m_config.model_path);
+  std::ifstream probe(path);
   if (!probe.good()) {
-    LOG(INFO) << fmt::format("[多层级做市] 未找到模型 {}，从初始权重开始学习",
-                             m_config.model_path);
+    LOG(INFO) << fmt::format("[多层级做市] 未找到模型 {}，从初始权重开始学习", path);
     return false;
   }
 
-  const bool ok = m_policy.load(m_config.model_path);
+  const bool ok = m_policy.load(path);
   if (ok) {
-    LOG(INFO) << fmt::format("[多层级做市] 已加载模型: {}", m_config.model_path);
+    LOG(INFO) << fmt::format("[多层级做市] 已加载模型: {}", path);
   } else {
-    // 维度不匹配通常意味着 levels 配置变了，旧权重已无意义，退回初始权重。
-    LOG(WARNING) << fmt::format("[多层级做市] 模型 {} 与当前配置不匹配，改用初始权重",
-                               m_config.model_path);
+    // 维度或配置指纹不匹配：这份权重对当前配置已无意义，退回初始权重。
+    LOG(WARNING) << fmt::format("[多层级做市] 模型 {} 与当前配置不匹配，改用初始权重", path);
   }
   return ok;
 }
@@ -78,7 +121,9 @@ asio::awaitable<void> MultiLevelMarketMakingStrategy::shutdown() {
     LOG(INFO) << fmt::format("[多层级做市] 训练汇总: 共 {} 步, 平均奖励 {:.6f}",
                              m_train_steps, m_train_reward_sum / m_train_steps);
   }
-  saveModel();
+  // 只推理模式不落盘：评估过程中权重没有变化，保存只是把同一份内容写回去，
+  // 却会盖掉写入时间等元信息，也容易让"评估结果"与"训练结果"混淆。
+  if (!m_config.eval_only) saveModel();
   co_return;
 }
 
@@ -245,31 +290,35 @@ void MultiLevelMarketMakingStrategy::updateTransition(const std::vector<double>&
     const double inventory_cost = m_config.inventory_penalty *
         std::abs(inventory / std::max(m_config.inventory_limit, 1e-12));
     const double reward = cash_change + inventory_potential - inventory_cost;
-    m_policy.update(m_previous_observation, m_previous_action, reward,
-                    observation, false);
+    // eval_only：只推理不学习。评估已有权重时若继续 update，
+    // 评估过程本身会把权重改掉，且周期性落盘会覆盖掉被评估的那份权重。
+    if (!m_config.eval_only) {
+      m_policy.update(m_previous_observation, m_previous_action, reward,
+                      observation, false);
 
-    // 累计训练统计：平均奖励是否随时间上升，是判断策略在学的直接依据。
-    ++m_train_steps;
-    m_train_reward_sum += reward;
-    m_train_reward_window += reward;
-    // 窗口取 50：真实盘口下决策间隔通常是数十秒，200 步要几小时才输出一次，
-    // 不利于观察收敛趋势。
-    if (++m_train_window_count >= 50) {
-      LOG(INFO) << fmt::format(
-          "[多层级做市] 训练进度: 步数 {}, 近 {} 步平均奖励 {:.6f}, 累计平均 {:.6f}",
-          m_train_steps, m_train_window_count,
-          m_train_reward_window / m_train_window_count,
-          m_train_reward_sum / m_train_steps);
-      m_train_reward_window = 0.0;
-      m_train_window_count = 0;
-    }
+      // 累计训练统计：平均奖励是否随时间上升，是判断策略在学的直接依据。
+      ++m_train_steps;
+      m_train_reward_sum += reward;
+      m_train_reward_window += reward;
+      // 窗口取 50：真实盘口下决策间隔通常是数十秒，200 步要几小时才输出一次，
+      // 不利于观察收敛趋势。
+      if (++m_train_window_count >= 50) {
+        LOG(INFO) << fmt::format(
+            "[多层级做市] 训练进度: 步数 {}, 近 {} 步平均奖励 {:.6f}, 累计平均 {:.6f}",
+            m_train_steps, m_train_window_count,
+            m_train_reward_window / m_train_window_count,
+            m_train_reward_sum / m_train_steps);
+        m_train_reward_window = 0.0;
+        m_train_window_count = 0;
+      }
 
     // 周期性落盘：模型若只在 shutdown() 保存，进程被强杀或机器重启时
     // 本次运行的全部在线学习成果都会丢失，重启后又要从旧权重开始。
-    if (m_config.model_save_interval_steps > 0 &&
-        m_train_steps % static_cast<std::size_t>(m_config.model_save_interval_steps) == 0) {
-      saveModel();
-    }
+      if (m_config.model_save_interval_steps > 0 &&
+          m_train_steps % static_cast<std::size_t>(m_config.model_save_interval_steps) == 0) {
+        saveModel();
+      }
+    }  // !eval_only
   }
   m_previous_observation = observation;
   m_previous_cash = effectiveCash();
@@ -431,20 +480,47 @@ void MultiLevelMarketMakingStrategy::reconfigureOrders(
     plan.timestamp_ms = m_current_timestamp;
     plan.replace_policy = core::domain::ReplacePolicy::CANCEL_MISSING;
 
-    auto add_intent = [&plan](const std::string& intent_id,
-                              core::domain::Side side,
-                              core::domain::OrderType type,
-                              int level,
-                              double price,
-                              double quantity) {
+    // 报价按固定精度量化：中价小幅抖动不再产生新价格，未变化的档位可以被复用，
+    // 而不是每帧全撤全挂（线上撤单率 83% 的主因）。步长必须与中价无关，
+    // 否则量化结果依然每帧变化。
+    const double tick = quoteTick(currentMidPrice());
+    std::unordered_set<std::string> quoted_ids;
+    auto add_intent = [this, &plan, &quoted_ids, tick](const std::string& intent_id,
+                                                       core::domain::Side side,
+                                                       core::domain::OrderType type,
+                                                       int level,
+                                                       double price,
+                                                       double quantity) {
       if (quantity <= 0.0 || price <= 0.0) return;
+      // 买单向下、卖单向上取整，避免量化把两侧报价压到同一价位。
+      const TickRounding rounding =
+          type == core::domain::OrderType::MARKET
+              ? TickRounding::NEAREST
+              : (side == core::domain::Side::BUY ? TickRounding::DOWN : TickRounding::UP);
+      dec_float quantized_price = toDecimal(price, tick, rounding);
+      if (quantized_price <= 0) return;
+      // 重新报价阈值：目标价相对在途报价的偏移小于阈值时沿用旧报价。
+      // 中价每帧都在动，逐帧重挂会把撤单率推到 80% 以上，实盘还要额外
+      // 付出 API 限额；报价滞后一点点远好过每次决策都全撤全挂。
+      const auto previous = m_last_quotes.find(intent_id);
+      if (type != core::domain::OrderType::MARKET &&
+          m_config.requote_threshold_bps > 0.0 && previous != m_last_quotes.end() &&
+          previous->second > 0) {
+        const dec_float diff = quantized_price > previous->second
+            ? quantized_price - previous->second : previous->second - quantized_price;
+        const dec_float threshold =
+            previous->second * dec_float(m_config.requote_threshold_bps / 10000.0);
+        if (diff <= threshold) quantized_price = previous->second;
+      }
+      m_last_quotes[intent_id] = quantized_price;
+      quoted_ids.insert(intent_id);
       core::domain::OrderIntent intent;
       intent.intent_id = intent_id;
       intent.symbol = plan.symbol;
       intent.side = side;
       intent.type = type;
       intent.level = level;
-      intent.price = toDecimal(price);
+      intent.price = quantized_price;
       intent.quantity = toDecimal(quantity);
       plan.intents.push_back(std::move(intent));
     };
@@ -488,6 +564,8 @@ void MultiLevelMarketMakingStrategy::reconfigureOrders(
       level_step = std::max(level_step, std::abs(toDouble(m_market->asks[0].price) -
                                                  toDouble(m_market->asks[1].price)));
     }
+    // 档位间距不得小于量化步长，否则相邻档位会被量化到同一个价格上。
+    level_step = std::max(level_step, quoteTick(mid));
 
     for (int level = 0; level < m_config.levels; ++level) {
       const double offset = half_spread + level_step * level;
@@ -497,6 +575,16 @@ void MultiLevelMarketMakingStrategy::reconfigureOrders(
       add_intent(fmt::format("ask-{}", level), core::domain::Side::SELL,
                  core::domain::OrderType::LIMIT, level, reservation + offset,
                  lots[3 + m_config.levels + level] * m_config.order_size);
+    }
+
+    // 本帧没有报价的档位（预算为 0）会被撤掉，其历史报价不再代表"在途报价"，
+    // 必须清掉，否则该档位下次出现时会沿用一份已经过期的价格。
+    for (auto it = m_last_quotes.begin(); it != m_last_quotes.end();) {
+      if (quoted_ids.contains(it->first)) {
+        ++it;
+      } else {
+        it = m_last_quotes.erase(it);
+      }
     }
 
     const auto result = context->submit(plan);

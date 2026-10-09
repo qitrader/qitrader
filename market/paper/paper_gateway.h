@@ -79,6 +79,13 @@ class PaperGateway : public base::Gateway {
   /// 开启行情录制；为空路径表示不录制。文件以追加方式打开，重启后继续录制。
   void setRecordPath(const std::string& path);
 
+  /// 以追加方式打开录制文件，空文件时补表头；打开失败只告警不中断行情。
+  void openRecord();
+
+  /// 录制文件按 UTC 日期切割：长期运行时单个 CSV 会无界增长（约 170MB/天），
+  /// 跨天时把当前文件改名为 <path>.YYYYMMDD，再用原路径重新开一个。
+  void rotateRecordIfNeeded(int64_t timestamp_ms);
+
  private:
   /// 处理虚拟成交事件，更新账户和持仓
   void onTradeEvent(std::shared_ptr<engine::OrderData> order,
@@ -133,6 +140,7 @@ class PaperGateway : public base::Gateway {
 
   std::string m_record_path;             ///< 行情录制落盘路径，为空表示不录制
   std::unique_ptr<std::ofstream> m_record;
+  std::string m_record_day;              ///< 当前录制文件对应的 UTC 日期（YYYYMMDD）
   /// 录制盘口档数，需与 CSV 扩展列及 CsvLoader 的解析保持一致
   static constexpr std::size_t kRecordBookLevels = 5;
 

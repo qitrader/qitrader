@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "actor_critic.h"
@@ -26,6 +27,14 @@ struct MultiLevelConfig {
   double exploration{0.05};
   /// 模型落盘路径；非空时启动时加载、关闭时保存，使在线学习成果可累积
   std::string model_path;
+  /// 模型读取路径；为空时回退 model_path。
+  /// 可以"读旧权重、写新文件"，避免评估或换档训练时覆盖掉基准权重。
+  std::string model_load_path;
+  /// 丢弃已有权重回到初始权重。配置档位变化（如 min_half_spread_bps 6 -> 24）
+  /// 后，旧权重的动作语义已失效，必须重新学习而不是继续沿用。
+  bool reset_model{false};
+  /// 只推理不学习：跳过 Actor-Critic 更新与周期性落盘，用于评估已有权重。
+  bool eval_only{false};
   /// 每训练多少步周期性落盘一次；<=0 表示只在关闭时保存。
   /// 长期运行的进程若只在退出时保存，被 kill -9 或机器重启会让全部在线学习成果丢失。
   int model_save_interval_steps{500};
@@ -40,6 +49,10 @@ struct MultiLevelConfig {
   /// 持多头时保留价下移，双边报价随之下移，卖出更易成交、买入更保守，
   /// 从而把库存拉回中性，避免单边囤积后被迫止损。
   double inventory_skew_bps{0.0};
+  /// 重新报价阈值（bps）：目标价格相对当前在途报价的偏移小于该值时沿用旧报价。
+  /// 中价每帧都在动，逐帧重挂会把撤单率推到 80% 以上（实盘还要额外付出
+  /// API 限额与手续费）。设为 0 表示每次决策都重挂。
+  double requote_threshold_bps{5.0};
 };
 
 /**
@@ -103,6 +116,9 @@ class MultiLevelMarketMakingStrategy : public base::Strategy {
 
   std::vector<double> m_previous_observation;
   std::vector<double> m_previous_action;
+
+  /// 每个档位上一次实际提交的报价，用于重新报价阈值（requote_threshold_bps）判定
+  std::unordered_map<std::string, dec_float> m_last_quotes;
 };
 
 }  // namespace strategy::multilevel

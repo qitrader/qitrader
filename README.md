@@ -295,7 +295,9 @@ SYMBOL=ETH-USDT CAPITAL=1000 STRATEGY=multilevel INTERVAL=60 ./paper_service.sh 
 [模拟交易] 行情已停滞 183s，判定连接静默挂起，主动中断以触发重连
 ```
 
-日志写入 `logs/paper.log`，超过 200MB 自动切割。高频调试日志（下单请求、挂单/撤单明细）默认不输出，需要时用 `--v=1` 开启。
+日志写入 `logs/paper.log`，超过 200MB 自动切割。`paper_daemon.sh` 默认带 `GLOG_v=1`，长跑会保留下单请求、挂单/撤单与成交明细；前台运行时需要显式加 `--v=1`。命令行未指定 `--v` 时沿用环境变量 `GLOG_v`，不会被默认值覆盖。
+
+带 `--record-file` 时行情按 UTC 日期切割：跨天把当前文件改名为 `<path>.YYYYMMDD`，再用原路径重新开一个，避免单个 CSV 无界增长。
 
 ### 实盘
 
@@ -331,10 +333,16 @@ SYMBOL=ETH-USDT CAPITAL=1000 STRATEGY=multilevel INTERVAL=60 ./paper_service.sh 
 | `--mm-inventory-penalty` | 库存惩罚系数 | `0.01` |
 | `--mm-learning-rate` | Actor-Critic 学习率 | `0.0005` |
 | `--mm-exploration` | 探索强度 | `0.05` |
+| `--mm-min-half-spread-bps` | 单边报价最小偏移（bps），需覆盖双边手续费 | `0` |
+| `--mm-inventory-skew-bps` | 库存偏斜强度（bps）：持多头时保留价下移 | `0` |
+| `--mm-requote-threshold-bps` | 重新报价阈值：目标价相对在途报价偏移小于该值时沿用旧报价，用于压低撤单率 | `5` |
 | `--maker-fee-rate` / `--taker-fee-rate` | 挂单 / 吃单手续费率 | `0.0008` / `0.001` |
 | `--report-interval` | Paper 模式账户摘要间隔（秒） | `60` |
 | `--record-file` | 录制带盘口的实时行情到 CSV | 空（不录制） |
 | `--model-path` | RL 模型权重落盘路径 | 空（不持久化） |
+| `--model-load-path` | RL 权重读取路径，为空则用 `--model-path`（读旧权重、写新文件） | 空 |
+| `--mm-reset-model` | 丢弃已有权重，从初始权重重新学习 | 关闭 |
+| `--mm-eval-only` | 只推理不更新权重，也不落盘（评估已有权重） | 关闭 |
 | `--max-order-quantity` | 事前风控：单笔最大数量，`0` 关闭 | `0` |
 | `--max-order-notional` | 事前风控：单笔最大名义价值，`0` 关闭 | 初始资金 |
 | `--max-position-quantity` | 事前风控：最大净持仓数量，`0` 关闭 | `0` |

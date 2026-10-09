@@ -45,6 +45,10 @@ public:
          "Record live market data (with order book) to CSV for offline replay training")
         ("model-path", po::value<std::string>()->default_value(""),
          "Path to save/load RL model weights (multilevel), empty disables persistence")
+        ("model-load-path", po::value<std::string>()->default_value(""),
+         "Path to load RL weights from; empty falls back to --model-path (read old, write new)")
+        ("mm-reset-model", "Ignore existing RL weights and retrain from scratch (multilevel)")
+        ("mm-eval-only", "Inference only: do not update/persist RL weights (multilevel)")
         ("maker-fee-rate", po::value<std::string>()->default_value("0.0008"),
          "Maker (limit) fee rate for paper/backtest, 0.0008 = 0.08% (OKX spot Lv1)")
         ("taker-fee-rate", po::value<std::string>()->default_value("0.001"),
@@ -69,6 +73,7 @@ public:
         ("mm-min-half-spread-bps", po::value<double>()->default_value(0.0), "Minimum half spread in bps so a round trip covers fees")
         ("mm-allow-market-orders", po::value<int>()->default_value(0), "Allow taker market orders, 1 enables (usually unprofitable)")
         ("mm-inventory-skew-bps", po::value<double>()->default_value(0.0), "Inventory skew strength in bps applied to reservation price")
+        ("mm-requote-threshold-bps", po::value<double>()->default_value(5.0), "Skip requoting a level when the target price moves less than this many bps (cut cancel/submit churn)")
         ("max-order-quantity", po::value<std::string>()->default_value("0"), "Pre-trade risk: max quantity per order, 0 disables")
         ("max-order-notional", po::value<std::string>()->default_value(""), "Pre-trade risk: max notional per order, empty means initial capital, 0 disables")
         ("max-position-quantity", po::value<std::string>()->default_value("0"), "Pre-trade risk: max net position quantity, 0 disables")
@@ -92,6 +97,13 @@ public:
   /// glog 的 VLOG 级别（--v=N）
   int verbose() const {
     return m_vm["v"].as<int>();
+  }
+
+  /// 是否显式指定了 --v。
+  /// 未显式指定时不应覆盖环境变量 GLOG_v：守护脚本用 export GLOG_v=1 开启
+  /// 长跑明细日志，无条件赋值会把它重置成 0，导致线上日志只剩摘要。
+  bool has_verbose() const {
+    return m_vm.count("v") > 0 && !m_vm["v"].defaulted();
   }
 
   /// 日志文件路径，为空表示输出到 stderr
@@ -173,6 +185,17 @@ public:
     return m_vm["model-path"].as<std::string>();
   }
 
+  /// 获取模型读取路径，为空表示与 --model-path 相同
+  std::string model_load_path() const {
+    return m_vm["model-load-path"].as<std::string>();
+  }
+
+  /// 是否丢弃已有权重、从初始权重重新学习
+  bool mm_reset_model() const { return m_vm.count("mm-reset-model") > 0; }
+
+  /// 是否只推理不更新权重（用于评估已有权重）
+  bool mm_eval_only() const { return m_vm.count("mm-eval-only") > 0; }
+
   /// 获取挂单成交（maker）手续费率
   std::string maker_fee_rate() const {
     return m_vm["maker-fee-rate"].as<std::string>();
@@ -232,6 +255,9 @@ public:
   double mm_min_half_spread_bps() const { return m_vm["mm-min-half-spread-bps"].as<double>(); }
   int mm_allow_market_orders() const { return m_vm["mm-allow-market-orders"].as<int>(); }
   double mm_inventory_skew_bps() const { return m_vm["mm-inventory-skew-bps"].as<double>(); }
+  double mm_requote_threshold_bps() const {
+    return m_vm["mm-requote-threshold-bps"].as<double>();
+  }
 
   std::string max_order_quantity() const { return m_vm["max-order-quantity"].as<std::string>(); }
   std::string max_order_notional() const { return m_vm["max-order-notional"].as<std::string>(); }

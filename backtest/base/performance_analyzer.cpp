@@ -137,6 +137,7 @@ void PerformanceAnalyzer::report(const dec_float& final_equity) const {
   auto total_return = calcTotalReturn(final_equity);
   auto max_drawdown = calcMaxDrawdown();
   auto sharpe = calcSharpeRatio();
+  auto raw_sharpe = calcRawSharpeRatio();
 
   const TradeStats stats = calcTradeStats();
 
@@ -150,6 +151,9 @@ void PerformanceAnalyzer::report(const dec_float& final_equity) const {
   LOG(INFO) << fmt::format("最大回撤:     {}%",
                            dec_float(max_drawdown * 100).str(2, std::ios_base::fixed));
   LOG(INFO) << fmt::format("夏普比率:     {}", sharpe.str(4, std::ios_base::fixed));
+  // 长跑快照间隔只有 60s，年化因子约 725，年化值量级失真；
+  // 同时给出未年化值，便于判断策略本身的收益/波动比。
+  LOG(INFO) << fmt::format("夏普(未年化): {}", raw_sharpe.str(6, std::ios_base::fixed));
   LOG(INFO) << "--------------------------------------------";
   LOG(INFO) << fmt::format("总成交笔数:   {}", stats.total_fills);
   LOG(INFO) << fmt::format("平仓回合:     {}", stats.closed_rounds);
@@ -191,10 +195,20 @@ dec_float PerformanceAnalyzer::calcMaxDrawdown() const {
   return max_dd;
 }
 
-dec_float PerformanceAnalyzer::calcSharpeRatio() const {
-  if (m_equity_curve.size() < 2) return dec_float(0);
+dec_float PerformanceAnalyzer::calcRawSharpeRatio() const {
+  dec_float mean(0);
+  dec_float stddev(0);
+  if (!calcReturnStats(mean, stddev)) return dec_float(0);
+  if (stddev == 0) return dec_float(0);
+  return mean / stddev;
+}
 
-  // 计算每日收益率
+bool PerformanceAnalyzer::calcReturnStats(dec_float& mean, dec_float& stddev) const {
+  mean = dec_float(0);
+  stddev = dec_float(0);
+  if (m_equity_curve.size() < 2) return false;
+
+  // 计算每个净值快照之间的收益率
   std::vector<dec_float> returns;
   for (size_t i = 1; i < m_equity_curve.size(); ++i) {
     if (m_equity_curve[i - 1].second > 0) {
@@ -204,14 +218,14 @@ dec_float PerformanceAnalyzer::calcSharpeRatio() const {
     }
   }
 
-  if (returns.empty()) return dec_float(0);
+  if (returns.empty()) return false;
 
   // 平均收益率
   dec_float sum(0);
   for (const auto& r : returns) {
     sum += r;
   }
-  dec_float mean = sum / dec_float(returns.size());
+  mean = sum / dec_float(returns.size());
 
   // 标准差
   dec_float var_sum(0);
@@ -219,8 +233,14 @@ dec_float PerformanceAnalyzer::calcSharpeRatio() const {
     dec_float diff = r - mean;
     var_sum += diff * diff;
   }
-  dec_float stddev = boost::multiprecision::sqrt(var_sum / dec_float(returns.size()));
+  stddev = boost::multiprecision::sqrt(var_sum / dec_float(returns.size()));
+  return true;
+}
 
+dec_float PerformanceAnalyzer::calcSharpeRatio() const {
+  dec_float mean(0);
+  dec_float stddev(0);
+  if (!calcReturnStats(mean, stddev)) return dec_float(0);
   if (stddev == 0) return dec_float(0);
 
   // 根据净值快照的实际平均时间间隔年化，而不是假设每个快照都是日收益率。

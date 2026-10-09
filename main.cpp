@@ -65,7 +65,11 @@ int main(int argc, char* argv[]) {
   // 初始化Google日志系统
   google::InitGoogleLogging(argv[0]);
   FLAGS_minloglevel = google::INFO;  // 设置最小日志级别为INFO
-  FLAGS_v = AppOptions->verbose();   // --v=N 开启 VLOG(N) 调试日志
+  // --v=N 开启 VLOG(N) 调试日志；未显式指定时保留环境变量 GLOG_v 的值，
+  // 否则守护脚本 export GLOG_v=1 会被默认值 0 覆盖，长跑日志只剩摘要。
+  if (AppOptions->has_verbose()) {
+    FLAGS_v = AppOptions->verbose();
+  }
 
   // 未指定 --log 时保持输出到 stderr；指定时按目录 + 文件前缀落盘。
   const std::string log_path = AppOptions->log_file();
@@ -216,9 +220,13 @@ int main(int argc, char* argv[]) {
       config.learning_rate = AppOptions->mm_learning_rate();
       config.exploration = AppOptions->mm_exploration();
       config.model_path = AppOptions->model_path();
+      config.model_load_path = AppOptions->model_load_path();
+      config.reset_model = AppOptions->mm_reset_model();
+      config.eval_only = AppOptions->mm_eval_only();
       config.min_half_spread_bps = AppOptions->mm_min_half_spread_bps();
       config.allow_market_orders = AppOptions->mm_allow_market_orders() != 0;
       config.inventory_skew_bps = AppOptions->mm_inventory_skew_bps();
+      config.requote_threshold_bps = AppOptions->mm_requote_threshold_bps();
       if (config.levels <= 0 || config.order_budget <= 0 || config.order_size <= 0.0 ||
           config.inventory_limit <= 0.0 || config.decision_interval_ms < 0 ||
           config.learning_rate <= 0.0 || config.exploration < 0.0 ||

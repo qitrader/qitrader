@@ -3,6 +3,8 @@
 #include <boost/asio/steady_timer.hpp>
 #include <chrono>
 #include <algorithm>
+#include <cstdio>
+#include <ctime>
 #include <glog/logging.h>
 
 using namespace std::chrono_literals;
@@ -32,6 +34,17 @@ void releaseReserved(dec_float& reserved, const dec_float& amount,
       what, order_id, amount.str(8, std::ios_base::fixed),
       reserved.str(8, std::ios_base::fixed));
   reserved = dec_float(0);
+}
+
+/// 毫秒时间戳对应的 UTC 日期（YYYYMMDD）。用 UTC 而不是本地时区，
+/// 与行情时间戳的时区保持一致，避免跨时区部署时切割点漂移。
+std::string utcDayString(int64_t timestamp_ms) {
+  const std::time_t seconds = static_cast<std::time_t>(timestamp_ms / 1000);
+  std::tm tm{};
+  gmtime_r(&seconds, &tm);
+  char buf[16] = {0};
+  std::strftime(buf, sizeof(buf), "%Y%m%d", &tm);
+  return std::string(buf);
 }
 
 }  // namespace
@@ -236,8 +249,17 @@ dec_float PaperGateway::calcFee(const dec_float& turnover, bool is_maker) const 
 
 void PaperGateway::setRecordPath(const std::string& path) {
   m_record_path = path;
+  m_record_day.clear();
   if (m_record_path.empty()) return;
 
+  openRecord();
+  // 按行情时间戳所在的 UTC 日期切割；首次录制时以当前时刻初始化，
+  // 避免把"今天之前的残留文件"误判为跨天而立刻切割一次。
+  m_record_day = utcDayString(nowMs());
+  LOG(INFO) << fmt::format("[模拟交易] 开始录制行情到: {}", m_record_path);
+}
+
+void PaperGateway::openRecord() {
   m_record = std::make_unique<std::ofstream>(m_record_path, std::ios::out | std::ios::app);
   if (!m_record->is_open()) {
     LOG(ERROR) << fmt::format("[模拟交易] 无法打开录制文件: {}", m_record_path);
@@ -254,11 +276,38 @@ void PaperGateway::setRecordPath(const std::string& path) {
     }
     *m_record << '\n';
   }
-  LOG(INFO) << fmt::format("[模拟交易] 开始录制行情到: {}", m_record_path);
+}
+
+void PaperGateway::rotateRecordIfNeeded(int64_t timestamp_ms) {
+  if (!m_record || timestamp_ms <= 0 || m_record_path.empty()) return;
+
+  const std::string day = utcDayString(timestamp_ms);
+  if (m_record_day.empty()) {
+    m_record_day = day;
+    return;
+  }
+  if (day == m_record_day) return;
+
+  // 先把已缓冲的数据落盘，再把当前文件改名为带日期后缀的归档文件，
+  // 然后用原路径重新开一个（openRecord 会为新文件补表头）。
+  m_record->flush();
+  m_record.reset();
+
+  const std::string archived = m_record_path + "." + m_record_day;
+  if (std::rename(m_record_path.c_str(), archived.c_str()) != 0) {
+    LOG(WARNING) << fmt::format("[模拟交易] 录制文件切割失败，继续写入原文件: {}", m_record_path);
+  } else {
+    LOG(INFO) << fmt::format("[模拟交易] 录制文件按日切割: {} -> {}", m_record_path, archived);
+  }
+  openRecord();
+  m_record_day = day;
 }
 
 void PaperGateway::recordTick(const std::shared_ptr<engine::TickData>& tick) {
   if (!m_record || !tick) return;
+  rotateRecordIfNeeded(tick->timestamp_ms > 0 ? tick->timestamp_ms : nowMs());
+  if (!m_record) return;  // 切割后可能打开失败
+
   const auto& book = tick->order_book;
   // 没有盘口的行情对做市训练没有价值，直接跳过。
   if (!book || book->bids.empty() || book->asks.empty()) return;
@@ -379,6 +428,10 @@ asio::awaitable<void> PaperGateway::ws_deal(std::shared_ptr<OkxWs> ws) {
 
 asio::awaitable<void> PaperGateway::deal_book(const std::string& symbol,
                                                const std::vector<WsBook>& msg) {
+  // 订单簿也是行情：看门狗的时间戳必须在这里一并刷新。
+  // 只在 deal_tick 刷新的话，一旦交易所只停推 tickers 而 books 正常，
+  // 看门狗会误判"连接静默挂起"并打断一条健康连接。
+  m_last_tick_time_ms.store(nowMs());
   for (auto& book_item : msg) {
     auto item = std::make_shared<engine::Book>();
     item->symbol = symbol;

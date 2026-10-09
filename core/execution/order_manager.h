@@ -37,8 +37,14 @@ class OrderManager {
   std::optional<domain::ActiveOrder> find(const std::string& order_id) const;
 
  private:
+  /// 逐字段精确相等（REPLACE_ALL 等精确语义仍使用）
   static bool sameIntent(const domain::OrderIntent& lhs,
                          const domain::OrderIntent& rhs);
+
+  /// 按"档位身份 + 价格容差"比较：身份一致、数量精确相等、价格落在相对
+  /// 容差内即视为同一档位，可继续挂在场内而不必撤单重挂。
+  static bool sameLevel(const domain::OrderIntent& lhs,
+                        const domain::OrderIntent& rhs);
 
   std::unordered_map<std::string, domain::ActiveOrder> m_active_orders;
   std::unordered_map<std::string, std::string> m_plan_fingerprints;

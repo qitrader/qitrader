@@ -252,7 +252,137 @@ void testActorCriticLearns() {
   assert(!mismatched.deserialize(dumped));
 }
 
+void testLevelIdentityReconcile() {
+  // 增量替换：报价按 tick 量化后，未变化的档位必须留在场内，
+  // 否则每次决策都会全撤全挂（线上实测撤单率 83%）。
+  core::execution::OrderManager orders;
+  OrderPlan plan;
+  plan.plan_id = "MM-ETH-USDT-1";
+  plan.idempotency_key.value = plan.plan_id;
+  plan.strategy_id = "multilevel:ETH-USDT";
+  plan.symbol = "ETH-USDT";
+  plan.replace_policy = core::domain::ReplacePolicy::CANCEL_MISSING;
+
+  OrderIntent bid;
+  bid.intent_id = "bid-0";
+  bid.symbol = plan.symbol;
+  bid.side = Side::BUY;
+  bid.type = OrderType::LIMIT;
+  bid.level = 0;
+  bid.price = dec_float("3000.10");
+  bid.quantity = dec_float("1");
+  OrderIntent ask = bid;
+  ask.intent_id = "ask-0";
+  ask.side = Side::SELL;
+  ask.price = dec_float("3007.30");
+  plan.intents = {bid, ask};
+
+  const auto first = orders.reconcile(plan);
+  assert(first.operations.size() == 2);
+  assert(orders.registerOrder("MM-ETH-USDT-1:bid-0", plan.strategy_id, bid).accepted);
+  assert(orders.registerOrder("MM-ETH-USDT-1:ask-0", plan.strategy_id, ask).accepted);
+
+  // 价格只在容差内抖动（相对 ~3e-14，远小于 1e-9）→ 两个档位都保留，空 diff
+  OrderPlan jitter = plan;
+  jitter.plan_id = "MM-ETH-USDT-2";
+  jitter.idempotency_key.value = jitter.plan_id;
+  jitter.intents[0].price = dec_float("3000.1000000001");
+  jitter.intents[1].price = dec_float("3007.3000000001");
+  assert(orders.reconcile(jitter).operations.empty());
+
+  // 只改买单档位的价格（远超容差）→ 只换这一档，卖单档位保留
+  OrderPlan moved = plan;
+  moved.plan_id = "MM-ETH-USDT-3";
+  moved.idempotency_key.value = moved.plan_id;
+  moved.intents[0].price = dec_float("2998.00");
+  const auto moved_diff = orders.reconcile(moved);
+  assert(moved_diff.operations.size() == 2);
+  assert(moved_diff.operations.front().type == core::domain::OrderOperationType::CANCEL);
+  assert(moved_diff.operations.front().order_id == "MM-ETH-USDT-1:bid-0");
+  assert(moved_diff.operations.back().type == core::domain::OrderOperationType::SUBMIT);
+  assert(moved_diff.operations.back().intent->intent_id == "bid-0");
+
+  // 数量变化（价格不变）→ 必须替换
+  OrderPlan resized = plan;
+  resized.plan_id = "MM-ETH-USDT-4";
+  resized.idempotency_key.value = resized.plan_id;
+  resized.intents[0].quantity = dec_float("2");
+  const auto resized_diff = orders.reconcile(resized);
+  assert(resized_diff.operations.size() == 2);
+  assert(resized_diff.operations.front().type == core::domain::OrderOperationType::CANCEL);
+  assert(resized_diff.operations.front().order_id == "MM-ETH-USDT-1:bid-0");
+  assert(resized_diff.operations.back().intent->quantity == dec_float("2"));
+}
+
+void testReplaceAllNotShortCircuited() {
+  core::execution::OrderManager orders;
+  OrderPlan plan;
+  plan.plan_id = "plan-1";
+  plan.strategy_id = "strategy-1";
+  plan.symbol = "BTC-USDT";
+  plan.replace_policy = core::domain::ReplacePolicy::CANCEL_MISSING;
+  OrderIntent intent;
+  intent.symbol = plan.symbol;
+  intent.side = Side::BUY;
+  intent.type = OrderType::LIMIT;
+  intent.price = dec_float("10");
+  intent.quantity = dec_float("1");
+  plan.intents.push_back(intent);
+
+  assert(orders.reconcile(plan).operations.size() == 1);
+  assert(orders.registerOrder("order-1", plan.strategy_id, intent).accepted);
+
+  // 内容一致时短路为空 diff（plan_id 变化不应影响语义判定）
+  OrderPlan same = plan;
+  same.plan_id = "plan-2";
+  same.idempotency_key.value = same.plan_id;
+  assert(orders.reconcile(same).operations.empty());
+
+  // REPLACE_ALL 必须无视指纹短路，仍然全撤全挂
+  OrderPlan replace_all = same;
+  replace_all.plan_id = "plan-3";
+  replace_all.idempotency_key.value = replace_all.plan_id;
+  replace_all.replace_policy = core::domain::ReplacePolicy::REPLACE_ALL;
+  const auto diff = orders.reconcile(replace_all);
+  assert(diff.operations.size() == 2);
+  assert(diff.operations.front().type == core::domain::OrderOperationType::CANCEL);
+  assert(diff.operations.front().order_id == "order-1");
+  assert(diff.operations.back().type == core::domain::OrderOperationType::SUBMIT);
+}
+
+void testActorCriticConfigFingerprintAndReset() {
+  using strategy::multilevel::ActorCritic;
+  ActorCritic policy(6, 3, 0.05, 0.1);
+  policy.setConfigFingerprint("levels=3,min_half_spread_bps=6");
+  const std::vector<double> observation(6, 0.5);
+  for (int step = 0; step < 50; ++step) {
+    const auto action = policy.sample(observation);
+    policy.update(observation, action, action[0] - 0.5, observation, false);
+  }
+  const std::string trained = policy.serialize();
+  const std::string path = "/tmp/qitrader_core_test_actor_critic.txt";
+  assert(policy.save(path));
+
+  // 同配置可加载
+  ActorCritic compatible(6, 3, 0.05, 0.1);
+  compatible.setConfigFingerprint("levels=3,min_half_spread_bps=6");
+  assert(compatible.load(path));
+
+  // 换档（6bps -> 24bps）后旧权重必须被拒绝，而不是静默复用
+  ActorCritic incompatible(6, 3, 0.05, 0.1);
+  incompatible.setConfigFingerprint("levels=3,min_half_spread_bps=24");
+  assert(!incompatible.load(path));
+
+  // reset() 回到初始权重
+  compatible.reset();
+  assert(compatible.serialize() != trained);
+  std::remove(path.c_str());
+}
+
 }  // namespace
+
+/// 撮合引擎用例在独立文件里（tests/match_engine_test.cpp）
+void runMatchEngineTests();
 
 int main() {
   struct TestCase {
@@ -266,6 +396,10 @@ int main() {
       {"MarketMakingEnvironment 动作到订单计划", &testMarketMakingEnvironment},
       {"Reward 手续费与滑点成本分解", &testRewardCostBreakdown},
       {"ActorCritic 在合成任务上可学习且可持久化", &testActorCriticLearns},
+      {"按档位身份+价格容差的计划差异（降低撤单率）", &testLevelIdentityReconcile},
+      {"REPLACE_ALL 不被指纹短路", &testReplaceAllNotShortCircuited},
+      {"ActorCritic 配置指纹校验与 reset", &testActorCriticConfigFingerprintAndReset},
+      {"MatchEngine 队列模型与逆向选择滑点", &runMatchEngineTests},
   };
 
   for (const auto& test_case : cases) {

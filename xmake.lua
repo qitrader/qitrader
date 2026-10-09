@@ -32,14 +32,16 @@ target("qitrader")
 
 target("qitrader-core-tests")
     set_kind("binary")
-    add_includedirs(".", "common/", "core/", "strategy/")
+    add_includedirs(".", "common/", "core/", "strategy/", "engine/", "backtest/")
     add_files("tests/core_runtime_test.cpp")
+    add_files("tests/match_engine_test.cpp")
+    add_files("backtest/match/match_engine.cpp")
     add_files("strategy/multilevel/actor_critic.cpp")
     add_files("core/portfolio/portfolio_ledger.cpp")
     add_files("core/risk/risk_manager.cpp")
     add_files("core/execution/order_manager.cpp")
     add_files("core/environment/market_making_environment.cpp")
-    add_packages("boost", "fmt", "jsoncpp")
+    add_packages("boost", "fmt", "jsoncpp", "glog")
     -- 断言用 assert 实现：release 模式下 NDEBUG 会把断言全部编译掉，
     -- 测试会"恒绿"。这里强制取消 NDEBUG，保证任何模式下断言都生效。
     add_cxflags("-UNDEBUG")

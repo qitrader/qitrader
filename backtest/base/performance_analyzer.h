@@ -110,8 +110,16 @@ class PerformanceAnalyzer {
   /// 计算最大回撤
   dec_float calcMaxDrawdown() const;
 
+  /// 计算净值快照收益率序列的均值与标准差；快照不足时返回 false
+  bool calcReturnStats(dec_float& mean, dec_float& stddev) const;
+
   /// 计算夏普比率（年化，无风险利率默认为 0）
   dec_float calcSharpeRatio() const;
+
+  /// 计算未年化的夏普（每个净值快照一个收益率的均值/标准差）。
+  /// 长跑场景快照间隔只有 60s，年化因子约 √525960≈725，
+  /// 年化值会被放大到难以解读（线上曾出现 -145），未年化值用于判断量级。
+  dec_float calcRawSharpeRatio() const;
 
   /// 计算成交与胜负统计
   TradeStats calcTradeStats() const;

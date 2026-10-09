@@ -21,13 +21,31 @@ ActorCritic::ActorCritic(std::size_t observation_size, std::size_t action_size,
       m_critic_weights(observation_size, 0.0),
       m_random(42),
       m_normal(0.0, 1.0) {
+  initializeParameters();
+}
+
+void ActorCritic::initializeParameters() {
   // 小幅确定性初始化，保证回测结果可复现且初始动作接近均匀分配。
+  m_actor_weights.assign(m_action_size, std::vector<double>(m_observation_size, 0.0));
+  m_actor_bias.assign(m_action_size, 0.0);
+  m_critic_weights.assign(m_observation_size, 0.0);
+  m_critic_bias = 0.0;
+  m_last_mean.clear();
+  m_last_sample.clear();
   for (std::size_t action = 0; action < m_action_size; ++action) {
     for (std::size_t feature = 0; feature < m_observation_size; ++feature) {
       m_actor_weights[action][feature] =
           0.01 * std::sin(static_cast<double>((action + 1) * (feature + 1)));
     }
   }
+}
+
+void ActorCritic::reset() {
+  initializeParameters();
+}
+
+void ActorCritic::setConfigFingerprint(const std::string& fingerprint) {
+  m_config_fingerprint = fingerprint;
 }
 
 std::vector<double> ActorCritic::logits(const std::vector<double>& observation) const {
@@ -117,7 +135,10 @@ void ActorCritic::update(const std::vector<double>& observation,
 std::string ActorCritic::serialize() const {
   std::ostringstream out;
   out.precision(17);
-  out << m_observation_size << ' ' << m_action_size << '\n';
+  // 首行带版本与配置指纹：指纹让"换档后的旧权重"在加载时被识别为不兼容。
+  // 指纹为空写 '-'，保证字段数固定。
+  out << "v1 " << m_observation_size << ' ' << m_action_size << ' '
+      << (m_config_fingerprint.empty() ? std::string("-") : m_config_fingerprint) << '\n';
   for (double value : m_actor_bias) out << value << ' ';
   out << '\n';
   for (const auto& row : m_actor_weights) {
@@ -134,7 +155,28 @@ bool ActorCritic::deserialize(const std::string& data) {
   std::istringstream in(data);
   std::size_t observation_size = 0;
   std::size_t action_size = 0;
-  if (!(in >> observation_size >> action_size)) return false;
+
+  // 首行可能是 "v1 <obs> <act> <fingerprint>"（新格式）或 "<obs> <act>"（旧格式）。
+  // 旧格式无指纹，视为匹配，保证升级前的权重文件仍可用。
+  std::string header;
+  if (!(in >> header)) return false;
+  if (header == "v1") {
+    std::string fingerprint;
+    if (!(in >> observation_size >> action_size >> fingerprint)) return false;
+    if (fingerprint == "-") fingerprint.clear();
+    // 双方都有指纹且不相等：配置档位变了（如 min_half_spread_bps 6 -> 24），
+    // 旧权重的动作语义已失效，必须拒绝而不是静默复用。
+    if (!fingerprint.empty() && !m_config_fingerprint.empty() &&
+        fingerprint != m_config_fingerprint) {
+      return false;
+    }
+  } else if (!header.empty() && header[0] == 'v') {
+    return false;  // 未来版本，当前实现无法解析
+  } else {
+    observation_size = std::stoull(header);
+    if (!(in >> action_size)) return false;
+  }
+
   // 维度必须一致：特征数随 levels 变化，加载旧模型会得到无意义的动作。
   if (observation_size != m_observation_size || action_size != m_action_size) return false;
 

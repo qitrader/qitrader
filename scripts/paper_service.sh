@@ -52,6 +52,10 @@ MM_INVENTORY_LIMIT="${MM_INVENTORY_LIMIT:-0.2}"
 # 单边报价最小偏移（bps）。必须设到费率量级：贴着盘口报价时往返价差（ETH 约 3 bps）
 # 覆盖不了双边手续费（16 bps），每笔必亏。实测 24 bps 可把回测亏损从 -24% 收敛到 -0.2%。
 MM_MIN_HALF_SPREAD_BPS="${MM_MIN_HALF_SPREAD_BPS:-24}"
+# 重新报价阈值（bps）：目标价相对在途报价偏移小于该值时沿用旧报价。
+# 中价每帧都在动，逐帧重挂会把撤单率推到 80% 以上，实盘还要额外付 API 限额。
+# 调大更省撤单，但报价会更滞后。
+MM_REQUOTE_BPS="${MM_REQUOTE_BPS:-10}"
 # 库存偏斜强度（bps）：持多头时保留价下移，把库存拉回中性，压缩期末持仓的浮亏。
 MM_SKEW_BPS="${MM_SKEW_BPS:-15}"
 GRID_LOWER="${GRID_LOWER:-}"
@@ -82,6 +86,9 @@ build_args() {
     if [[ -n "$MM_MIN_HALF_SPREAD_BPS" ]]; then
       args+=(--mm-min-half-spread-bps "$MM_MIN_HALF_SPREAD_BPS")
     fi
+    if [[ -n "$MM_REQUOTE_BPS" ]]; then
+      args+=(--mm-requote-threshold-bps "$MM_REQUOTE_BPS")
+    fi
     if [[ -n "$MM_SKEW_BPS" ]]; then
       args+=(--mm-inventory-skew-bps "$MM_SKEW_BPS")
     fi
@@ -104,6 +111,15 @@ do_start() {
   if is_running; then
     echo "已在运行，PID=$(cat "$PID_FILE")。如需重启请先执行 stop。"
     return 0
+  fi
+  # pid 文件缺失不代表没有守护进程：手动 nohup 起的守护进程不会写 pid 文件，
+  # 再 start 一次会出现两个守护者抢着拉起交易进程（下单/撤单随之中断）。
+  local stray
+  stray=$(pgrep -f "paper_daemon\.sh" | grep -v "^$$\$" | tr '\n' ' ')
+  if [[ -n "${stray// /}" ]]; then
+    echo "发现未在 pid 文件中登记的守护进程: $stray"
+    echo "请先执行 stop 清理，避免重复守护。"
+    return 1
   fi
   if [[ ! -x "$BIN" ]]; then
     echo "找不到可执行文件: $BIN"
@@ -135,11 +151,31 @@ do_stop() {
     kill "$pid" 2>/dev/null && echo "已停止守护进程 $pid"
     rm -f "$PID_FILE"
   fi
+  # 兜底清理：手动 nohup 启动的守护进程不会写 pid 文件，只杀 pid 文件里的
+  # 进程会漏掉真正拉起交易进程的守护者——交易进程被杀后 5 秒就被重新拉起，
+  # stop 看起来"失效"（线上曾因此出现 PID 悄悄变化）。
+  # 逐个 kill 而不是 pkill -f：pkill 的 -f 会匹配到执行本脚本的 shell 自己。
+  local daemon_pid
+  for daemon_pid in $(pgrep -f "paper_daemon\.sh" 2>/dev/null); do
+    [[ "$daemon_pid" == "$$" ]] && continue
+    kill "$daemon_pid" 2>/dev/null && echo "已停止额外守护进程 $daemon_pid"
+  done
+
   # 给交易进程发 SIGTERM，触发优雅关闭并输出绩效报告。
   # 用二进制路径锚定匹配，避免误杀执行本脚本的 shell（其命令行含相同字符串）。
   if pkill -TERM -f "^$BIN" 2>/dev/null; then
     echo "已向交易进程发送 SIGTERM，等待优雅退出..."
-    sleep 3
+    # 优雅关闭要输出绩效报告并落盘模型权重，3 秒往往不够，轮询等待。
+    local waited=0
+    while pgrep -f "^$BIN" >/dev/null 2>&1 && [[ $waited -lt 15 ]]; do
+      sleep 1
+      waited=$((waited + 1))
+    done
+    if pgrep -f "^$BIN" >/dev/null 2>&1; then
+      echo "警告: ${waited}s 后仍未退出，可检查日志或手动 kill"
+    else
+      echo "交易进程已退出（等待 ${waited}s）"
+    fi
   else
     echo "未发现运行中的交易进程"
   fi

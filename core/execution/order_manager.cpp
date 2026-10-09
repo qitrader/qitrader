@@ -3,6 +3,7 @@
 #include <sstream>
 #include <utility>
 #include <algorithm>
+#include <unordered_set>
 
 namespace core::execution {
 
@@ -17,6 +18,36 @@ std::string intentKey(const domain::OrderIntent& intent) {
          << intent.reduce_only;
   return stream.str();
 }
+
+/// 价格相对容差。策略按 tick 量化后，同一档位跨帧的差异只来自浮点往返尾数，
+/// 1e-9 相对误差足以吸收噪声，又远小于一个 tick，不会把真实改价误判成"未变"。
+constexpr double kPriceRelativeTolerance = 1e-9;
+/// 极小价格下的绝对容差下限，避免相对容差在 0 附近退化。
+constexpr double kPriceAbsoluteFloor = 1e-12;
+
+dec_float magnitude(const dec_float& value) {
+  return value < 0 ? dec_float(-value) : value;
+}
+
+bool priceNear(const dec_float& lhs, const dec_float& rhs) {
+  const dec_float diff = lhs > rhs ? lhs - rhs : rhs - lhs;
+  const dec_float lhs_abs = magnitude(lhs);
+  const dec_float rhs_abs = magnitude(rhs);
+  const dec_float scale = lhs_abs > rhs_abs ? lhs_abs : rhs_abs;
+  const dec_float tolerance = scale * dec_float(kPriceRelativeTolerance);
+  const dec_float floor_value = dec_float(kPriceAbsoluteFloor);
+  return diff <= (tolerance > floor_value ? tolerance : floor_value);
+}
+
+/// 档位身份键：优先 intent_id（"bid-0"/"ask-1"），为空时回退方向+档位+类型。
+std::string identityKey(const domain::OrderIntent& intent) {
+  if (!intent.intent_id.empty()) return "id:" + intent.intent_id;
+  std::ostringstream stream;
+  stream << "anon:" << intent.symbol << '|' << static_cast<int>(intent.side) << '|'
+         << static_cast<int>(intent.type) << '|' << intent.level << '|'
+         << intent.reduce_only;
+  return stream.str();
+}
 }
 
 bool OrderManager::sameIntent(const domain::OrderIntent& lhs,
@@ -26,17 +57,15 @@ bool OrderManager::sameIntent(const domain::OrderIntent& lhs,
       lhs.reduce_only == rhs.reduce_only;
 }
 
+bool OrderManager::sameLevel(const domain::OrderIntent& lhs,
+                             const domain::OrderIntent& rhs) {
+  return lhs.symbol == rhs.symbol && lhs.side == rhs.side && lhs.type == rhs.type &&
+      lhs.level == rhs.level && lhs.reduce_only == rhs.reduce_only &&
+      lhs.quantity == rhs.quantity && priceNear(lhs.price, rhs.price);
+}
+
 domain::OrderPlanDiff OrderManager::reconcile(const domain::OrderPlan& plan) {
   domain::OrderPlanDiff diff{plan.plan_id, plan.strategy_id, plan.symbol, {}};
-  std::string fingerprint;
-  for (const auto& intent : plan.intents) fingerprint += intentKey(intent) + ';';
-  const std::string plan_key = plan.idempotency_key.empty()
-      ? plan.plan_id : plan.idempotency_key.value;
-  const auto previous = m_plan_fingerprints.find(plan.strategy_id + '|' + plan.symbol);
-  if (previous != m_plan_fingerprints.end() && previous->second == plan_key + '|' + fingerprint) {
-    return diff;
-  }
-  m_plan_fingerprints[plan.strategy_id + '|' + plan.symbol] = plan_key + '|' + fingerprint;
 
   std::vector<std::string> scoped_ids;
   for (const auto& [order_id, active] : m_active_orders) {
@@ -44,6 +73,25 @@ domain::OrderPlanDiff OrderManager::reconcile(const domain::OrderPlan& plan) {
       scoped_ids.push_back(order_id);
     }
   }
+  // 排序后建索引：unordered_map 的遍历顺序不确定，"命中哪一单"会随进程抖动。
+  std::sort(scoped_ids.begin(), scoped_ids.end());
+
+  // 指纹只由语义内容 + 作用域内活动订单集合构成，不含每次递增的 plan_id /
+  // 幂等键——否则 multilevel 这类每帧生成新 plan_id 的策略永远命中不了短路。
+  // 带上活动集合是安全所需：某档成交消失后即使计划内容一字未变也必须重挂，
+  // 否则该档会永久空缺。
+  std::string content;
+  for (const auto& intent : plan.intents) content += intentKey(intent) + ';';
+  std::string active_key;
+  for (const auto& order_id : scoped_ids) active_key += order_id + ';';
+  const std::string fingerprint = content + '#' + active_key;
+  const std::string scope_key = plan.strategy_id + '|' + plan.symbol;
+  // REPLACE_ALL 的语义是"无条件全撤全挂"，不能被指纹短路跳过。
+  if (plan.replace_policy != domain::ReplacePolicy::REPLACE_ALL) {
+    const auto previous = m_plan_fingerprints.find(scope_key);
+    if (previous != m_plan_fingerprints.end() && previous->second == fingerprint) return diff;
+  }
+  m_plan_fingerprints[scope_key] = fingerprint;
 
   if (plan.replace_policy == domain::ReplacePolicy::REPLACE_ALL) {
     for (const auto& order_id : scoped_ids) {
@@ -51,17 +99,28 @@ domain::OrderPlanDiff OrderManager::reconcile(const domain::OrderPlan& plan) {
     }
   }
 
-  std::vector<bool> retained(scoped_ids.size(), false);
+  std::unordered_map<std::string, std::vector<std::string>> index;
+  for (const auto& order_id : scoped_ids) {
+    const auto it = m_active_orders.find(order_id);
+    if (it == m_active_orders.end()) continue;
+    index[identityKey(it->second.intent)].push_back(order_id);
+  }
+
+  std::unordered_set<std::string> retained;
   for (const auto& intent : plan.intents) {
     bool found = false;
     if (plan.replace_policy != domain::ReplacePolicy::REPLACE_ALL) {
-      for (std::size_t i = 0; i < scoped_ids.size(); ++i) {
-        const auto it = m_active_orders.find(scoped_ids[i]);
-        if (it == m_active_orders.end() || retained[i]) continue;
-        if (sameIntent(it->second.intent, intent)) {
-          retained[i] = true;
-          found = true;
-          break;
+      const auto bucket = index.find(identityKey(intent));
+      if (bucket != index.end()) {
+        for (const auto& order_id : bucket->second) {
+          if (retained.contains(order_id)) continue;
+          const auto it = m_active_orders.find(order_id);
+          if (it == m_active_orders.end()) continue;
+          if (sameLevel(it->second.intent, intent)) {
+            retained.insert(order_id);
+            found = true;
+            break;
+          }
         }
       }
     }
@@ -72,9 +131,9 @@ domain::OrderPlanDiff OrderManager::reconcile(const domain::OrderPlan& plan) {
 
   if (plan.replace_policy != domain::ReplacePolicy::KEEP_EXISTING &&
       plan.replace_policy != domain::ReplacePolicy::REPLACE_ALL) {
-    for (std::size_t i = 0; i < scoped_ids.size(); ++i) {
-      if (!retained[i]) {
-        diff.operations.push_back({domain::OrderOperationType::CANCEL, scoped_ids[i], std::nullopt});
+    for (const auto& order_id : scoped_ids) {
+      if (!retained.contains(order_id)) {
+        diff.operations.push_back({domain::OrderOperationType::CANCEL, order_id, std::nullopt});
       }
     }
   }

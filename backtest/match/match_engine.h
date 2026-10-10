@@ -37,6 +37,11 @@ struct FillModelConfig {
   bool queue_model{true};
   /// 每笔主动成交量里能用于吃掉前置队列的比例
   dec_float fill_ratio{dec_float("0.3")};
+  /// 前置排队量的上界 = 挂单量 × 该系数。
+  /// 盘口累计量通常是挂单量的几十上百倍，直接用它会让小单永远排不到
+  /// （线上实测 16 小时零成交）。取挂单量的若干倍作为上界：既保留"要排队"
+  /// 的约束，又不会把小额做市单判成永不成成交。
+  dec_float queue_depth_factor{dec_float("3")};
   /// 逆向选择滑点（bps）：0 关闭，>0 时成交价朝不利方向偏移
   int adverse_slippage_bps{0};
   /// 行情没有成交量时的退化成交量（K 线回放场景）

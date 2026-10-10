@@ -362,6 +362,9 @@ asio::awaitable<void> PaperGateway::watch_public() {
 
     if (m_stopped.load()) co_return;
 
+    // 这里是真正的重连路径（对端断开 / read_loop 判死），必须计入重连次数：
+    // 只在看门狗中断时累加的话，摘要会一直显示"重连 0 次"而掩盖真实断连。
+    ++m_reconnect_count;
     retry_count++;
     if (retry_count > max_retry) {
       LOG(ERROR) << fmt::format("[模拟交易] 达到最大重试次数 {}，停止重连", max_retry);

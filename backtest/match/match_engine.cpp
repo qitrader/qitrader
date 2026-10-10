@@ -245,15 +245,23 @@ dec_float MatchEngine::computeQueueAhead(const engine::BookPtr& book,
   const dec_float fallback = volume * dec_float("0.5");
   if (!book) return fallback;
 
+  // 排队量按挂单量封顶：盘口累计量常常是挂单量的几十上百倍，照搬会让小额
+  // 做市单永远排在队尾（线上实测 16 小时零成交）。取挂单量的若干倍作为上界，
+  // 既保留"要排队"的约束，又不会把小单判成永不成成交。
+  const dec_float cap = volume * m_fill_model.queue_depth_factor;
+
   if (direction == engine::Direction::BUY) {
     if (book->bids.empty()) return fallback;
     const dec_float ahead = accumulatedBids(book, limit_price);
     // 挂单价格低于买一（做市常见）：同侧没有更优档位，用买一档量近似。
-    return ahead > 0 ? ahead : book->bids.front().volume;
+    const dec_float raw = ahead > 0 ? ahead : book->bids.front().volume;
+    return raw > cap ? cap : raw;
   }
   if (book->asks.empty()) return fallback;
   const dec_float ahead = accumulatedAsks(book, limit_price);
-  return ahead > 0 ? ahead : book->asks.front().volume;
+  // 卖侧排队量取卖一档；此前误写成买一档，会把卖单的前置队列算错。
+  const dec_float raw = ahead > 0 ? ahead : book->asks.front().volume;
+  return raw > cap ? cap : raw;
 }
 
 dec_float MatchEngine::aggressiveVolume(const dec_float& tick_volume) const {
